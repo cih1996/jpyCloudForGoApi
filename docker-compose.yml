@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  go-port-trans:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    image: go-port-trans:latest
+    container_name: port-trans
+    ports:
+      - "1001:1001"
+      - "1002:1002"
+      - "9009:9009"  # RPA Service Port
+      - "5555:5555"  # ADB Debug Port
+    restart: unless-stopped
