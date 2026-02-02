@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"port-mapping-demo/internal/config"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/framework"
 
@@ -10,6 +11,7 @@ import (
 )
 
 func main() {
+	config.LoadConfig()
 	logs.SetLevel("INFO", logs.LevelInfo)
 
 	// Register Routes
@@ -20,9 +22,13 @@ func main() {
 	framework.Register[service.MiddleCommandRequest, interface{}]("POST", "/api/middle", "Execute middleware command", service.MiddleExecuteCommand)
 	framework.Register("POST", "/api/config/update", "Update WebSocket configuration", service.UpdateConfig)
 	framework.Register("POST", "/api/config/get", "Get WebSocket configuration", service.GetConfig)
+	framework.Register("POST", "/api/unified", "Unified Request Handler", service.HandleUnifiedRequest)
 
 	// Initialize Gin
 	r := gin.Default()
+
+	// WebSocket support for Unified Request
+	r.GET("/api/unified/ws", service.UnifiedWSHandler)
 
 	// CORS Middleware
 	r.Use(func(c *gin.Context) {
@@ -47,6 +53,12 @@ func main() {
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusOK, html)
 	})
+
+	// Static files
+	distPath := "./static"
+	r.Static("/assets", distPath+"/assets")
+	r.StaticFile("/", distPath+"/index.html")
+	r.StaticFile("/vite.svg", distPath+"/vite.svg")
 
 	// Start WebSocket Server
 	go framework.StartWS(1002)

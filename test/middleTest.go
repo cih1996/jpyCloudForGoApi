@@ -14,8 +14,8 @@ import (
 )
 
 // PlatformKey 平台Key，请在此处填入或通过环境变量获取
-var PlatformKey = "100464b9ff5fdbf3fac10fdebf689d2759d51769611579681"
-var host = "home.accjs.cn:30003"
+var PlatformKey = "10002ac0e042f7331325739102ef2c489d5ae1770013344585"
+var host = "114.67.244.162"
 
 func main() {
 	logs.SetLevel("INFO", logs.LevelInfo)

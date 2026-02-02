@@ -1,0 +1,746 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"adminApi/changeOsCtl"
+	"adminApi/tbFileCtl"
+	"adminApi/userDeviceCtl"
+
+	"github.com/ghp3000/logs"
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+)
+
+var unifiedKey string
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+// UnifiedWSHandler handles WebSocket connections for unified requests
+func UnifiedWSHandler(c *gin.Context) {
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		logs.Error("Failed to upgrade websocket: %v", err)
+		return
+	}
+	defer ws.Close()
+
+	// Use a mutex to ensure thread-safe writing to the websocket
+	var writeMutex sync.Mutex
+
+	for {
+		// Read message
+		_, message, err := ws.ReadMessage()
+		if err != nil {
+			logs.Error("WebSocket read error: %v", err)
+			break
+		}
+
+		// Process in a goroutine to handle multiple requests concurrently if needed
+		// But for now, we can do it synchronously to ensure order, or async with captured loop variables
+		go func(msg []byte) {
+			var req UnifiedRequest
+			if err := json.Unmarshal(msg, &req); err != nil {
+				sendWSResponse(ws, &writeMutex, &UnifiedResponse{
+					Code: 400,
+					Msg:  "Invalid JSON format",
+				})
+				return
+			}
+
+			// Call the existing logic
+			// We create a background context since the request context might be cancelled if connection closes?
+			// Actually, if connection closes, we probably want to stop.
+			// But for now context.Background() is safe for the handler logic.
+			res, err := HandleUnifiedRequest(context.Background(), &req)
+			if err != nil {
+				// Should have been handled inside, but just in case
+				res = &UnifiedResponse{
+					Type: req.Type,
+					Seq:  req.Seq,
+					Code: 500,
+					Msg:  err.Error(),
+				}
+			}
+
+			sendWSResponse(ws, &writeMutex, res)
+		}(message)
+	}
+}
+
+func sendWSResponse(ws *websocket.Conn, mu *sync.Mutex, res *UnifiedResponse) {
+	mu.Lock()
+	defer mu.Unlock()
+	if err := ws.WriteJSON(res); err != nil {
+		logs.Error("WebSocket write error: %v", err)
+	}
+}
+
+// UnifiedRequest defines the structure for all requests
+type UnifiedRequest struct {
+	Type   string      `json:"type"`
+	Token  string      `json:"token,omitempty"`
+	Seq    int         `json:"seq"`
+	Data   interface{} `json:"data,omitempty"`
+	FuncId int         `json:"funcId,omitempty"` // For GetTaskStatus
+	Req    bool        `json:"req,omitempty"`    // For Changephones
+}
+
+// UnifiedResponse defines the structure for all responses
+type UnifiedResponse struct {
+	Type string      `json:"type"`
+	Code int         `json:"code"`
+	Msg  string      `json:"msg"`
+	Data interface{} `json:"data,omitempty"`
+	Seq  int         `json:"seq,omitempty"`
+}
+
+// HandleUnifiedRequest handles all incoming unified requests
+func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedResponse, error) {
+	// For non-login requests, ensure globalApi is available
+	// Note: Authentication should be handled by middleware or check here if token is provided
+	// For simplicity, we assume the session is already established via EnsureLogin elsewhere or globalApi is ready
+	// If token is provided in Login request, we handle it.
+
+	res := &UnifiedResponse{
+		Type: req.Type,
+		Seq:  req.Seq,
+		Code: 200,
+		Msg:  "Success",
+	}
+
+	var err error
+
+	switch req.Type {
+	case "Login":
+		err = handleLogin(req.Token)
+	case "GetDeviceList":
+		res.Data, err = handleGetDeviceList()
+	case "Changephones":
+		res.Data, err = handleChangePhones(req.Data)
+	case "getAppList":
+		res.Data, err = handleGetAppList(req.Data)
+	case "getTaskStatus":
+		res.Data, err = handleGetTaskStatus(req.Data)
+	case "downLoadInstallApp":
+		res.Data, err = handleDownLoadInstallApp(req.Data)
+	case "getDownloadProgress":
+		res.Data, err = handleGetDownloadProgress(req.Data)
+	case "hideApp":
+		res.Data, err = handleHideApp(req.Data)
+	case "setSocket5":
+		res.Data, err = handleSetSocket5(req.Data)
+	case "getSocket5":
+		res.Data, err = handleGetSocket5(req.Data)
+	case "getS5outLine":
+		res.Data, err = handleGetS5outLine(req.Data)
+	case "getUserFiles":
+		res.Data, err = handleGetUserFiles(req.Data)
+	case "setLocation":
+		res.Data, err = handleSetLocation(req.Data)
+	case "execShell":
+		res.Data, err = handleExecShell(req.Data)
+	case "startApp":
+		res.Data, err = handleStartApp(req.Data)
+	default:
+		res.Code = 404
+		res.Msg = "Unknown request type"
+	}
+
+	if err != nil {
+		res.Code = 500
+		res.Msg = err.Error()
+	}
+
+	return res, nil
+}
+
+func handleLogin(token string) error {
+	unifiedKey = token // Save token for later use
+	return EnsureLogin(token)
+}
+
+func handleGetDeviceList() (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+
+	// Default to page 1, large size to get all
+	ret, err := globalApi.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
+		PageNum:  1,
+		PageSize: 999999,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf(err.Msg)
+	}
+	return ret, nil
+}
+
+// Helper to convert map to struct if needed, or just pass through
+// Since SendGenericCommandToDevice takes interface{}, we might need to process data
+// specific to each command type if necessary.
+
+// For Changephones (Type 3)
+// Data: [{"deviceId":..., "type":"changeDevice", "func":1, "paramsAll":...}]
+func handleChangePhones(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	var reqs []*changeOsCtl.ChangeOsReq
+	if err := json.Unmarshal(dataBytes, &reqs); err != nil {
+		return nil, fmt.Errorf("invalid data format for ChangeOs: %v", err)
+	}
+
+	res, errPkg := globalApi.ChangeOsCtl.ChangeOs(reqs)
+	if errPkg != nil {
+		return nil, fmt.Errorf("%s", errPkg.Msg)
+	}
+
+	return parseChangeOsRes(res), nil
+}
+
+func handleGetAppList(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type TempReq struct {
+		DeviceId uint64 `json:"deviceId"`
+	}
+	var tempReq TempReq
+	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
+		return nil, fmt.Errorf("invalid data format for GetAppList: %v", err)
+	}
+
+	if tempReq.DeviceId == 0 {
+		return nil, fmt.Errorf("deviceId is required")
+	}
+
+	info, err := findDeviceInfoWithCache(tempReq.DeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	// F=290 for Get App List
+	payload := map[string]interface{}{}
+
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 290, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
+func handleGetTaskStatus(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	var req changeOsCtl.GetChangeOsStatusReq
+	if err := json.Unmarshal(dataBytes, &req); err != nil {
+		return nil, fmt.Errorf("invalid data format for GetTaskStatus: %v", err)
+	}
+
+	res, errPkg := globalApi.ChangeOsCtl.GetChangeOsStatus(req)
+	if errPkg != nil {
+		return nil, fmt.Errorf("%s", errPkg.Msg)
+	}
+	return parseGetChangeOsStatusRes(res), nil
+}
+
+// Helper to parse Data field in responses
+func parseChangeOsRes(res []*changeOsCtl.ChangeOsRes) []map[string]interface{} {
+	var finalRes []map[string]interface{}
+	for _, s := range res {
+		sMap := make(map[string]interface{})
+		sBytes, _ := json.Marshal(s)
+		_ = json.Unmarshal(sBytes, &sMap)
+
+		if s.Data != "" {
+			var dataObj interface{}
+			if err := json.Unmarshal([]byte(s.Data), &dataObj); err == nil {
+				sMap["dataObj"] = dataObj
+			}
+		}
+		finalRes = append(finalRes, sMap)
+	}
+	return finalRes
+}
+
+func parseGetChangeOsStatusRes(res []*changeOsCtl.GetChangeOsStatusRes) []map[string]interface{} {
+	var finalRes []map[string]interface{}
+	for _, s := range res {
+		sMap := make(map[string]interface{})
+		sBytes, _ := json.Marshal(s)
+		_ = json.Unmarshal(sBytes, &sMap)
+
+		if s.Data != "" {
+			var dataObj interface{}
+			if err := json.Unmarshal([]byte(s.Data), &dataObj); err == nil {
+				sMap["dataObj"] = dataObj
+			}
+		}
+		finalRes = append(finalRes, sMap)
+	}
+	return finalRes
+}
+
+func handleDownLoadInstallApp(data interface{}) (interface{}, error) {
+	// "data":{"devices":[21323,21043],"url":"...","install":true,...}
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid data format")
+	}
+
+	devicesInterface, ok := m["devices"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("devices list missing")
+	}
+
+	var deviceIds []DeviceCommandInfo
+	for _, d := range devicesInterface {
+		if did, ok := d.(float64); ok {
+			info, err := findDeviceInfoWithCache(uint64(did))
+			if err == nil {
+				deviceIds = append(deviceIds, *info)
+			}
+		}
+	}
+
+	// Payload for F=293
+	// Extract other fields from data
+	payload := make(map[string]interface{})
+	for k, v := range m {
+		if k != "devices" {
+			payload[k] = v
+		}
+	}
+	// Ensure mandatory fields
+	payload["receive"] = true
+
+	// Use F=293 for Download/Install task
+	res, err := SendGenericCommandToDevice(unifiedKey, deviceIds, 293, payload, true, true, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
+func handleGetDownloadProgress(data interface{}) (interface{}, error) {
+	// Expected data: { "deviceId": 123, "id": "task_id" }
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid data format")
+	}
+
+	deviceIdVal, ok := m["deviceId"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("deviceId missing or invalid")
+	}
+	deviceId := uint64(deviceIdVal)
+
+	id, ok := m["id"].(string)
+	if !ok || id == "" {
+		return nil, fmt.Errorf("id (task id) missing or empty")
+	}
+
+	info, err := findDeviceInfoWithCache(deviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"id": id,
+	}
+
+	// F=294 for Get Download Progress
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 294, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
+func handleHideApp(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type TempReq struct {
+		DeviceId    uint64 `json:"deviceId"`
+		PackageName string `json:"packageName"`
+		IsHide      bool   `json:"isHide"`
+	}
+	var tempReq TempReq
+	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
+		return nil, fmt.Errorf("invalid data format for HideApp: %v", err)
+	}
+
+	if tempReq.DeviceId == 0 {
+		return nil, fmt.Errorf("deviceId is required")
+	}
+	if tempReq.PackageName == "" {
+		return nil, fmt.Errorf("packageName is required")
+	}
+
+	info, err := findDeviceInfoWithCache(tempReq.DeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	// Use DeviceId (int64)
+	did := int64(info.DeviceId)
+	req := changeOsCtl.HideAppReq{
+		TbDeviceId:  &did,
+		PackageName: &tempReq.PackageName,
+		IsHide:      &tempReq.IsHide,
+	}
+
+	if errPkg := globalApi.ChangeOsCtl.HideApp(req); errPkg != nil {
+		return nil, fmt.Errorf("%s", errPkg.Msg)
+	}
+	return "Success", nil
+}
+
+func handleSetSocket5(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type TempReq struct {
+		DeviceId uint64 `json:"deviceId"`
+		Id       uint64 `json:"id"`
+		S5Url    string `json:"s5Url"`
+		NOutSwID int    `json:"nOutSwID"`
+	}
+	var tempReq TempReq
+	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
+		return nil, fmt.Errorf("invalid data format for SetS5: %v", err)
+	}
+
+	targetId := tempReq.DeviceId
+	if targetId == 0 {
+		targetId = tempReq.Id
+	}
+	if targetId == 0 {
+		return nil, fmt.Errorf("deviceId is required")
+	}
+
+	info, err := findDeviceInfoWithCache(targetId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	tbId := int64(info.TbYunJiUserDeviceId)
+	req := userDeviceCtl.SetS5Req{
+		TbYunJiUserDeviceId: &tbId,
+		S5Url:               &tempReq.S5Url,
+		NOutSwID:            &tempReq.NOutSwID,
+	}
+
+	if errPkg := globalApi.UserDeviceCtl.SetS5(req); errPkg != nil {
+		return nil, fmt.Errorf("%s", errPkg.Msg)
+	}
+	return nil, nil
+}
+
+func handleGetSocket5(data interface{}) (interface{}, error) {
+	return nil, fmt.Errorf("use getS5outLine or check device list for S5 info")
+}
+
+func handleGetS5outLine(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type TempReq struct {
+		DeviceId uint64 `json:"deviceId"`
+		Id       uint64 `json:"id"`
+	}
+	var tempReq TempReq
+	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
+		return nil, fmt.Errorf("invalid data format for GetS5outLine: %v", err)
+	}
+
+	targetId := tempReq.DeviceId
+	if targetId == 0 {
+		targetId = tempReq.Id
+	}
+	if targetId == 0 {
+		return nil, fmt.Errorf("deviceId is required")
+	}
+
+	info, err := findDeviceInfoWithCache(targetId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	tbId := int64(info.TbYunJiUserDeviceId)
+	req := userDeviceCtl.GetOutLineReq{
+		TbYunJiUserDeviceId: &tbId,
+	}
+
+	res, errPkg := globalApi.UserDeviceCtl.GetOutLine(req)
+	if errPkg != nil {
+		return nil, fmt.Errorf("%s", errPkg.Msg)
+	}
+	return res, nil
+}
+
+func handleGetUserFiles(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+	var req tbFileCtl.ListReq
+	if err := json.Unmarshal(dataBytes, &req); err != nil {
+		return nil, fmt.Errorf("invalid data format for GetUserFiles: %v", err)
+	}
+
+	// 1. Get base download URL
+	baseUrl, errPkg := globalApi.TbFileCtl.GetDownloadUrl()
+	if errPkg != nil {
+		return nil, fmt.Errorf("failed to get download url: %s", errPkg.Msg)
+	}
+
+	// 2. Get file list
+	res, errPkg := globalApi.TbFileCtl.List(req)
+	if errPkg != nil {
+		return nil, fmt.Errorf("%s", errPkg.Msg)
+	}
+
+	// 3. Combine to form full URL
+	var finalRes []map[string]interface{}
+	for _, item := range res {
+		itemMap := make(map[string]interface{})
+		itemBytes, _ := json.Marshal(item)
+		_ = json.Unmarshal(itemBytes, &itemMap)
+
+		itemMap["url"] = baseUrl + "/" + item.Hash
+		finalRes = append(finalRes, itemMap)
+	}
+
+	return finalRes, nil
+}
+
+func handleSetLocation(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type SetLocationItem struct {
+		DeviceId uint64      `json:"deviceId"`
+		Lat      interface{} `json:"lat"`
+		Lng      interface{} `json:"lng"`
+	}
+
+	var items []SetLocationItem
+	// Support both array and single object
+	if err := json.Unmarshal(dataBytes, &items); err != nil {
+		var item SetLocationItem
+		if err2 := json.Unmarshal(dataBytes, &item); err2 == nil {
+			items = append(items, item)
+		} else {
+			return nil, fmt.Errorf("invalid data format: %v", err)
+		}
+	}
+
+	var results []interface{}
+
+	for _, item := range items {
+		if item.DeviceId == 0 {
+			results = append(results, map[string]interface{}{"deviceId": 0, "error": "deviceId is required"})
+			continue
+		}
+
+		info, err := findDeviceInfoWithCache(item.DeviceId)
+		if err != nil {
+			results = append(results, map[string]interface{}{"deviceId": item.DeviceId, "error": fmt.Sprintf("device not found: %v", err)})
+			continue
+		}
+
+		did := int64(info.DeviceId)
+		latStr := fmt.Sprintf("%v", item.Lat)
+		lngStr := fmt.Sprintf("%v", item.Lng)
+
+		req := changeOsCtl.SetLocationReq{
+			TbDeviceId: &did,
+			Latitude:   &latStr,
+			Longitude:  &lngStr,
+		}
+
+		errPkg := globalApi.ChangeOsCtl.SetLocation(req)
+		if errPkg != nil {
+			results = append(results, map[string]interface{}{"deviceId": item.DeviceId, "error": errPkg.Msg})
+		} else {
+			results = append(results, map[string]interface{}{"deviceId": item.DeviceId, "result": "success"})
+		}
+	}
+
+	return results, nil
+}
+
+func handleExecShell(data interface{}) (interface{}, error) {
+	// Expected data: { "deviceId": 123, "shell": "ls -l" }
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid data format")
+	}
+
+	deviceIdVal, ok := m["deviceId"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("deviceId missing or invalid")
+	}
+	deviceId := uint64(deviceIdVal)
+
+	shellCmd, ok := m["shell"].(string)
+	if !ok || shellCmd == "" {
+		return nil, fmt.Errorf("shell command missing or empty")
+	}
+
+	info, err := findDeviceInfoWithCache(deviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"shell": shellCmd,
+	}
+
+	// F=289 for Shell Execution
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 289, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
+func handleStartApp(data interface{}) (interface{}, error) {
+	// Expected data: { "deviceId": 123, "packageName": "com.example" }
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid data format")
+	}
+
+	deviceIdVal, ok := m["deviceId"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("deviceId missing or invalid")
+	}
+	deviceId := uint64(deviceIdVal)
+
+	pkgName, ok := m["packageName"].(string)
+	if !ok || pkgName == "" {
+		return nil, fmt.Errorf("packageName missing or empty")
+	}
+
+	info, err := findDeviceInfoWithCache(deviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"packageName": pkgName,
+	}
+
+	// F=291 for Start App
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 291, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
+type DeviceCommandRequest struct {
+	DeviceId  uint64      `json:"deviceId"`
+	Type      string      `json:"type"`
+	Func      int         `json:"func"`
+	ParamsAll interface{} `json:"paramsAll"`
+}
+
+func processDeviceCommands(data interface{}) (interface{}, error) {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal failed: %v", err)
+	}
+
+	var commands []DeviceCommandRequest
+	if err := json.Unmarshal(dataBytes, &commands); err != nil {
+		return nil, fmt.Errorf("unmarshal failed: %v", err)
+	}
+
+	var results []interface{}
+
+	for _, cmd := range commands {
+		info, err := findDeviceInfoWithCache(cmd.DeviceId)
+		if err != nil {
+			logs.Error("Device %d not found: %v", cmd.DeviceId, err)
+			results = append(results, map[string]interface{}{"deviceId": cmd.DeviceId, "error": err.Error()})
+			continue
+		}
+
+		// Send command
+		res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, uint16(cmd.Func), cmd.ParamsAll, true, true, 10*time.Second)
+		if err != nil {
+			logs.Error("Send command to device %d failed: %v", cmd.DeviceId, err)
+			results = append(results, map[string]interface{}{"deviceId": cmd.DeviceId, "error": err.Error()})
+		} else {
+			results = append(results, res)
+		}
+	}
+
+	return results, nil
+}
+
+func findDeviceInfoWithCache(deviceId uint64) (*DeviceCommandInfo, error) {
+	key := unifiedKey
+	if key == "" {
+		key = currentKey
+	}
+	if key == "" {
+		return nil, fmt.Errorf("not logged in")
+	}
+	return findDeviceInfo(key, deviceId)
+}

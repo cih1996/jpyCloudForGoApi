@@ -13,6 +13,11 @@ clean:
 	rm -rf dist/
 	rm -rf $(DIST_DIR)/
 
+dist-win:
+	mkdir -p $(DIST_DIR)
+	@echo "Building for Windows (amd64)..."
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe .
+
 dist:
 	mkdir -p $(DIST_DIR)
 	@echo "Building for Linux (amd64)..."
