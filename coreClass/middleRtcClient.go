@@ -105,6 +105,32 @@ func (c *Core) MiddleRtc收到设备shell命令返回(deviceId uint64, msg *publ
 func (c *Core) 公共Rtc收到消息(msg *public.Message, Id uint64, conn netclient.NetClient) {
 	logs.Info("[MiddleRtcClient]收到消息 F=%d, Seq=%d, Id=%d, Len=%d", msg.F, msg.Seq, Id, len(msg.DataMsgpack))
 
+	// Unified Callback Logic: Broadcast all received messages to unified WebSocket clients
+	if c.CallbackUnifiedMiddlewareMessage != nil {
+		var decodedData interface{}
+		// Try to decode payload if present
+		if len(msg.DataMsgpack) > 0 {
+			if err := msg.Unmarshal(&decodedData); err != nil {
+				logs.Warn("[MiddleRtcClient] Unified callback decode failed: %v", err)
+			}
+		}
+
+		// Calculate global DeviceID from ProxyID + Seat(Id)
+		proxyId := conn.Extra().(uint64)
+		realDeviceId := GetDeviceIdFromMiddleIdAndSeat(proxyId, uint8(Id))
+
+		// Wrap data with metadata (F, Seq, Id) as requested
+		wrappedData := map[string]interface{}{
+			"f":    msg.F,
+			"seq":  msg.Seq,
+			"id":   Id,
+			"data": decodedData,
+		}
+
+		// Invoke callback
+		c.CallbackUnifiedMiddlewareMessage(proxyId, realDeviceId, int(msg.Type), wrappedData)
+	}
+
 	// Check for synchronous callbacks
 	if val, ok := c.SyncCallbacks.Load(msg.Seq); ok {
 		if ch, ok := val.(chan interface{}); ok {
