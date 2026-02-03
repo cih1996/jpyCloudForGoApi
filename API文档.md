@@ -90,8 +90,47 @@ ws://127.0.0.1:1001/api/unified/ws
 
 ### 改机
 
+```
+type ChangeOsReq struct {
+	DeviceId *int64 `json:"deviceId,omitempty" validate:"required" title:"设备id" desc:"设备id"`
+	Category *string `json:"category" validate:"required" title:"模型id" desc:"category和version值：【191】代表的是安卓12机型模板、【291】代表的是安卓13机型模板、【391】代表的是安卓14机型模板"`
+	Bs *string `json:"bs" validate:"required" title:"bs" desc:"bs值：上网类型，【lbs】 代表的是基站、【wifi】 代表的是wifi"`
+	Operator *string `json:"operator" validate:"required" title:"运营商" desc:"operator值：【00】代表的是移动、【01】代表的是联通、【02】【03】代表的是电信"`
+	Timezone *string `json:"timezone" validate:"required" title:"时区" desc:"timezone值：【Asia/Shanghai】代表的是中国时区码"`
+	Language *string `json:"language" validate:"required" title:"语言" desc:"language值：【zh】代表的是手机系统语言"`
+	Version *string `json:"version" validate:"required" title:"版本" desc:"version值：【191】代表的是安卓12版本、【291】代表的是安卓13版本、【391】代表的是安卓14版本"`
+	Country *string `json:"country" validate:"required" title:"国家" desc:"country值：【cn】代表的是中国国家码"`
+	OperatorName *string `json:"operatorName" validate:"required" title:"运营商名称" desc:"operatorname值：【中国移动】代表的是运营商名称"`
+	Mcc *string `json:"mcc" validate:"required" title:"运营商ID" desc:"mcc和mnc都是：运营商ID"`
+	Mnc *string `json:"mnc" validate:"required" title:"运营商ID" desc:"mcc和mnc都是：运营商ID"`
+	Msisdn *string `json:"msisdn" validate:"required" title:"手机号" desc:"+12063138888"`
+	Smsc *string `json:"smsc" validate:"required" title:"短信中心" desc:"+12063177777"`
+}
+```
+
 ```json
-[{"deviceId": 112132, "category": "491", "bs": "wifi", "operator": "00", "timezone": "America/New_York", "language": "en-US", "version": "491", "country": "us", "operatorName": "AmeriLink", "mcc": "310", "mnc": "630", "msisdn": "", "smsc": ""}]
+{
+  "type": "Changephones",
+  "seq": 779,
+  "data": [
+    {
+      "deviceId": 21323,
+      "category": "491",        // 固定，491=15系统，391=14系统,291=13系统,191=12系统
+      "bs": "wifi",             // wifi=无线，lbs=基站
+      "operator": "00",         // 运营商代码，参考，全球运营商.ts 文档
+      "timezone": "Asia/Shanghai",   //时区，参考全球时区.xml
+      "language": "en-US",          //语言，参考全球语言.xml
+      "version": "491",         // 与 category相同
+      "country": "us",          // 国家代码，参考全球时区.xml 的 country_code
+      "operatorName": "中国移动", // 运营商名称，参考全球运营商.ts 文档
+      "mcc": "310",     // mcc 参考 全球运营商.ts ， 460 代表中国移动
+      "mnc": "00",     // mnc 参考 全球运营商.ts ， 00 代表中国移动 （与mcc关联）
+      "msisdn": "",   // 手机号码，如 +861800000000   （wifi模式可不需要）
+      "smsc": ""      // 短信中心，如 +861380495500
+    }
+  ],
+  "req": true
+}
 ```
 
 ```json

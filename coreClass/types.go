@@ -89,6 +89,7 @@ type Core struct {
 	SyncCallbacksByDeviceF sync.Map // key: "deviceId-F" -> chan interface{}
 	LogoutCallback         func()
 	ReconnectCallback      func(proxyId uint64)
+	CallbackUnifiedMiddlewareMessage func(proxyId uint64, deviceId uint64, msgType int, data interface{})
 
 	R系统名称             string
 	HttpUrl           string

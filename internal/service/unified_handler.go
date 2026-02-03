@@ -18,11 +18,52 @@ import (
 )
 
 var unifiedKey string
+var deviceCache sync.Map // map[uint64]*DeviceCommandInfo
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
+}
+
+// ClientManager manages connected WebSocket clients
+type ClientManager struct {
+	clients map[*websocket.Conn]*sync.Mutex
+	lock    sync.RWMutex
+}
+
+var unifiedClientManager = ClientManager{
+	clients: make(map[*websocket.Conn]*sync.Mutex),
+}
+
+func (manager *ClientManager) register(ws *websocket.Conn, mu *sync.Mutex) {
+	manager.lock.Lock()
+	defer manager.lock.Unlock()
+	manager.clients[ws] = mu
+}
+
+func (manager *ClientManager) unregister(ws *websocket.Conn) {
+	manager.lock.Lock()
+	defer manager.lock.Unlock()
+	if _, ok := manager.clients[ws]; ok {
+		delete(manager.clients, ws)
+	}
+}
+
+func (manager *ClientManager) broadcast(res *UnifiedResponse) {
+	manager.lock.RLock()
+	defer manager.lock.RUnlock()
+	for ws, mu := range manager.clients {
+		// Send asynchronously to avoid blocking
+		go func(w *websocket.Conn, m *sync.Mutex) {
+			sendWSResponse(w, m, res)
+		}(ws, mu)
+	}
+}
+
+// BroadcastToUnifiedClients is the exported function to send messages to all clients
+func BroadcastToUnifiedClients(res *UnifiedResponse) {
+	unifiedClientManager.broadcast(res)
 }
 
 // UnifiedWSHandler handles WebSocket connections for unified requests
@@ -36,6 +77,10 @@ func UnifiedWSHandler(c *gin.Context) {
 
 	// Use a mutex to ensure thread-safe writing to the websocket
 	var writeMutex sync.Mutex
+
+	// Register client
+	unifiedClientManager.register(ws, &writeMutex)
+	defer unifiedClientManager.unregister(ws)
 
 	for {
 		// Read message
@@ -151,6 +196,10 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedRes
 		res.Data, err = handleExecShell(req.Data)
 	case "startApp":
 		res.Data, err = handleStartApp(req.Data)
+	case "getDeviceDetail":
+		res.Data, err = handleGetDeviceDetail(req.Data)
+	case "getDeviceStatus":
+		res.Data, err = handleGetDeviceStatus(req.Data)
 	default:
 		res.Code = 404
 		res.Msg = "Unknown request type"
@@ -693,6 +742,78 @@ func handleStartApp(data interface{}) (interface{}, error) {
 	return processResponse(res), nil
 }
 
+func handleGetDeviceDetail(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type TempReq struct {
+		DeviceId uint64 `json:"deviceId"`
+	}
+	var tempReq TempReq
+	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
+		return nil, fmt.Errorf("invalid data format for GetDeviceDetail: %v", err)
+	}
+
+	if tempReq.DeviceId == 0 {
+		return nil, fmt.Errorf("deviceId is required")
+	}
+
+	info, err := findDeviceInfoWithCache(tempReq.DeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	// F=4 for Get Device Detail
+	payload := map[string]interface{}{}
+
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 4, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
+func handleGetDeviceStatus(data interface{}) (interface{}, error) {
+	if globalApi == nil {
+		return nil, fmt.Errorf("not logged in")
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	type TempReq struct {
+		DeviceId uint64 `json:"deviceId"`
+	}
+	var tempReq TempReq
+	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
+		return nil, fmt.Errorf("invalid data format for GetDeviceStatus: %v", err)
+	}
+
+	if tempReq.DeviceId == 0 {
+		return nil, fmt.Errorf("deviceId is required")
+	}
+
+	info, err := findDeviceInfoWithCache(tempReq.DeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	// F=6 for Get Device Status
+	payload := map[string]interface{}{}
+
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 6, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
+}
+
 type DeviceCommandRequest struct {
 	DeviceId  uint64      `json:"deviceId"`
 	Type      string      `json:"type"`
@@ -722,12 +843,12 @@ func processDeviceCommands(data interface{}) (interface{}, error) {
 		}
 
 		// Send command
-		res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, uint16(cmd.Func), cmd.ParamsAll, true, true, 10*time.Second)
+		res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, uint16(cmd.Func), cmd.ParamsAll, true, true, 15*time.Second)
 		if err != nil {
-			logs.Error("Send command to device %d failed: %v", cmd.DeviceId, err)
+			logs.Error("Failed to send command to device %d: %v", cmd.DeviceId, err)
 			results = append(results, map[string]interface{}{"deviceId": cmd.DeviceId, "error": err.Error()})
 		} else {
-			results = append(results, res)
+			results = append(results, map[string]interface{}{"deviceId": cmd.DeviceId, "result": processResponse(res)})
 		}
 	}
 
@@ -735,12 +856,41 @@ func processDeviceCommands(data interface{}) (interface{}, error) {
 }
 
 func findDeviceInfoWithCache(deviceId uint64) (*DeviceCommandInfo, error) {
-	key := unifiedKey
-	if key == "" {
-		key = currentKey
+	if val, ok := deviceCache.Load(deviceId); ok {
+		return val.(*DeviceCommandInfo), nil
 	}
-	if key == "" {
+
+	if globalApi == nil {
 		return nil, fmt.Errorf("not logged in")
 	}
-	return findDeviceInfo(key, deviceId)
+
+	// Refresh cache by fetching all devices
+	// Note: This might be heavy if called frequently without cache hits, but cache should help.
+	res, err := globalApi.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
+		PageNum:  1,
+		PageSize: 999999,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get device list failed: %v", err)
+	}
+
+	var found *DeviceCommandInfo
+	for _, d := range res.Records {
+		info := &DeviceCommandInfo{
+			DeviceId:            uint64(d.DeviceInfo.DeviceId),
+			TbProxyId:           uint64(d.DeviceInfo.TbProxyId),
+			TbYunJiUserDeviceId: uint64(d.TbYunJiUserDeviceId),
+		}
+		deviceCache.Store(info.DeviceId, info)
+
+		if info.DeviceId == deviceId {
+			found = info
+		}
+	}
+
+	if found != nil {
+		return found, nil
+	}
+
+	return nil, fmt.Errorf("device %d not found", deviceId)
 }

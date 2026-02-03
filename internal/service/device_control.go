@@ -227,7 +227,7 @@ func processResponse(res interface{}) interface{} {
 	return res
 }
 
-// findDeviceInfo finds device info by ID
+// 寻找对应key的设备ID
 func findDeviceInfo(key string, deviceId uint64) (*DeviceCommandInfo, error) {
 	if err := EnsureLogin(key); err != nil {
 		return nil, err

@@ -121,6 +121,22 @@ func EnsureLogin(key string) error {
 		manager.GetInstance().Core.MiddleRtcConnect(rtcToken)
 	}
 
+	// Set unified middleware message callback
+	manager.GetInstance().Core.CallbackUnifiedMiddlewareMessage = func(proxyId uint64, deviceId uint64, msgType int, data interface{}) {
+		// logs.Info("Broadcasting upstream message from proxy %d, device %d", proxyId, deviceId)
+		BroadcastToUnifiedClients(&UnifiedResponse{
+			Type: "UpstreamMessage",
+			Code: 200,
+			Msg:  "Received upstream message",
+			Data: map[string]interface{}{
+				"proxyId":  proxyId,
+				"deviceId": deviceId,
+				"msgType":  msgType,
+				"data":     data,
+			},
+		})
+	}
+
 	return nil
 }
 
