@@ -492,11 +492,22 @@ func handleSetSocket5(data interface{}) (interface{}, error) {
 		Id       uint64 `json:"id"`
 		S5Url    string `json:"s5Url"`
 		NOutSwID int    `json:"nOutSwID"`
+		LineType int    `json:"lineType"`
 	}
 	var tempReq TempReq
 	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
 		return nil, fmt.Errorf("invalid data format for SetS5: %v", err)
 	}
+
+	// Handle lineType logic
+	if tempReq.LineType == 1 {
+		// If lineType is 1, NOutSwID is optional and defaults to 10006
+		tempReq.NOutSwID = 10006
+	} else if tempReq.LineType != 0 {
+		// If lineType is not 0 and not 1, return error
+		return nil, fmt.Errorf("unsupported line type: %d", tempReq.LineType)
+	}
+	// If lineType is 0, use provided NOutSwID (or default 0)
 
 	targetId := tempReq.DeviceId
 	if targetId == 0 {
