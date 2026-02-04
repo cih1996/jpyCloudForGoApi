@@ -36,7 +36,23 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 	// 3. 按中间件分组设备
 	proxyGroups := make(map[uint64][]uint64)
 	for _, d := range deviceIds {
-		proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], d.DeviceId)
+		// Log extracted MiddleId and Seat for debugging
+		logs.Info("[device_control] Processing deviceId=%d, MiddleId=%d, Seat=%d",
+			d.DeviceId,
+			coreClass.GetMiddleIdFromDeviceId(d.DeviceId),
+			coreClass.GetSeatFromDeviceId(d.DeviceId))
+
+		// 如果 f=6，强制将 deviceId 设置为 0，因为这是直接发给中间件的指令
+		targetDeviceId := d.DeviceId
+		if f == 6 {
+			targetDeviceId = 0
+		}
+
+		if targetDeviceId == 0 {
+			proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], 0)
+		} else {
+			proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], targetDeviceId)
+		}
 	}
 
 	var allResults []interface{}
@@ -46,7 +62,7 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 		// 使用 ProxyId 作为连接 Key
 		_, connected := core.MidGetConn(proxyId)
 		if !connected {
-			logs.Info("Proxy %d not connected, initiating connection...", proxyId)
+			logs.Info("[device_control] Proxy %d not connected, initiating connection...", proxyId)
 
 			// 4.1 获取中间件 RTC Token
 			pId := int64(proxyId)
@@ -77,7 +93,7 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 				time.Sleep(200 * time.Millisecond)
 				if _, ok := core.MidGetConn(proxyId); ok {
 					connected = true
-					logs.Info("Proxy %d connected successfully", proxyId)
+					logs.Info("[device_control] Proxy %d connected successfully", proxyId)
 					break
 				}
 			}
@@ -85,7 +101,7 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 				return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
 			}
 		} else {
-			logs.Info("Proxy %d already connected, reusing connection", proxyId)
+			logs.Info("[device_control] Proxy %d already connected, reusing connection", proxyId)
 		}
 
 		// 5. 构造并发送命令
@@ -98,7 +114,12 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 		// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
 		res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
 		if err != nil {
-			logs.Error("Send command to proxy %d failed: %v", proxyId, err)
+			logs.Error("[device_control] Send command to proxy %d failed: %v", proxyId, err)
+
+			// 发生错误时（如超时），强制关闭连接，确保下次请求触发重连
+			logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
+			CloseMiddleConnection(proxyId)
+
 			// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
 			if isSync {
 				return nil, err

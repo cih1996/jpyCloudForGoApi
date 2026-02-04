@@ -213,7 +213,10 @@ func (c *Core) 公共Rtc收到消息(msg *public.Message, Id uint64, conn netcli
 	}
 }
 
-// MiddleRtcSendGenericCommand sends a generic command to devices via a specific middleware proxy.
+// 发送通用命令给设备
+// proxyId = 311
+// deviceIds = [0]
+// cmd = {f:6,seq:123,data:{}}
 func (c *Core) MiddleRtcSendGenericCommand(proxyId uint64, deviceIds []uint64, cmd GenericCommand, isSync bool, timeout time.Duration) (interface{}, error) {
 	if len(deviceIds) == 0 {
 		return nil, fmt.Errorf("no device ids provided")
@@ -226,11 +229,13 @@ func (c *Core) MiddleRtcSendGenericCommand(proxyId uint64, deviceIds []uint64, c
 	var ch chan interface{}
 	if isSync {
 		// Buffered channel to hold responses from all devices
+		// 缓存，通道，响应，所有，设备，存储
 		ch = make(chan interface{}, len(deviceIds))
 		c.SyncCallbacks.Store(seq, ch)
 		defer c.SyncCallbacks.Delete(seq)
 
 		// Also register by DeviceID + F for devices that return Seq=0
+		// 同时 注册 设备ID + F 的设备，这些设备，返回seq=0
 		for _, devId := range deviceIds {
 			key := fmt.Sprintf("%d-%d", devId, cmd.F)
 			c.SyncCallbacksByDeviceF.Store(key, ch)
@@ -281,12 +286,6 @@ func (c *Core) MiddleRtcSendGenericCommand(proxyId uint64, deviceIds []uint64, c
 	if isSync {
 		// Collect results
 		results := make([]interface{}, 0, successCount)
-		// We use a loop with select to gather responses
-		// We stop if we get all expected responses or timeout
-
-		// Note: We might get fewer responses than successCount if some fail silently on the other end
-		// So we rely on timeout to finish if not all respond.
-
 		endTime := time.Now().Add(timeout)
 
 		for len(results) < successCount {
@@ -297,6 +296,10 @@ func (c *Core) MiddleRtcSendGenericCommand(proxyId uint64, deviceIds []uint64, c
 
 			select {
 			case res := <-ch:
+				// F=6 Special Handling: Inject deviceId into response data based on proxyId and seat
+				if cmd.F == 6 {
+					c.processF6Response(res, proxyId)
+				}
 				results = append(results, res)
 			case <-time.After(remaining):
 				// Timeout will be handled by the loop condition on next iteration or break
@@ -318,6 +321,118 @@ func (c *Core) MiddleRtcSendGenericCommand(proxyId uint64, deviceIds []uint64, c
 	}
 
 	return cmd.Seq, nil
+}
+
+// processF6Response handles the specific logic for F=6 messages
+// It injects deviceId into the response data based on proxyId and seat
+func (c *Core) processF6Response(res interface{}, proxyId uint64) {
+	msg, ok := res.(*public.Message)
+	if !ok || len(msg.DataMsgpack) == 0 {
+		return
+	}
+
+	var rawData interface{}
+	if err := msgpack.Unmarshal(msg.DataMsgpack, &rawData); err != nil {
+		logs.Error("[MiddleRtcClient] Failed to unmarshal data for F=6: %v. Data: %x", err, msg.DataMsgpack)
+		return
+	}
+
+	// Log the raw data structure for debugging
+	logs.Info("[MiddleRtcClient] F=6 Response RawData (Type: %T): %+v, Hex: %x", rawData, rawData, msg.DataMsgpack)
+
+	var dataMap map[string]interface{}
+
+	// Handle different types of rawData
+	switch v := rawData.(type) {
+	case []interface{}:
+		// Case: The response is directly a list of devices (not wrapped in "data" field)
+		// This matches the user's log: Type: []interface {}
+		dataMap = make(map[string]interface{})
+		dataMap["data"] = v
+	case map[string]interface{}:
+		dataMap = v
+	case map[interface{}]interface{}:
+		// Convert map[interface{}]interface{} to map[string]interface{}
+		dataMap = make(map[string]interface{})
+		for k, val := range v {
+			if strKey, ok := k.(string); ok {
+				dataMap[strKey] = val
+			}
+		}
+	case string:
+		// Try to unmarshal string as JSON
+		// Sometimes data is returned as a JSON string
+		if jsonErr := json.Unmarshal([]byte(v), &dataMap); jsonErr != nil {
+			logs.Warn("[MiddleRtcClient] F=6 data is a string but not valid JSON: %v", jsonErr)
+			return
+		}
+	default:
+		logs.Warn("[MiddleRtcClient] F=6 data has unexpected type: %T", rawData)
+		return
+	}
+
+	// Check if inner "data" field exists and is a list
+	innerData, ok := dataMap["data"]
+	if !ok {
+		return
+	}
+
+	deviceList, ok := innerData.([]interface{})
+	if !ok {
+		return
+	}
+
+	updated := false
+	for _, item := range deviceList {
+		if deviceMap, ok := item.(map[string]interface{}); ok {
+			// Safely extract seat from various possible types
+			var seat uint8
+			if s, ok := deviceMap["seat"]; ok {
+				switch v := s.(type) {
+				case int:
+					seat = uint8(v)
+				case int8:
+					seat = uint8(v)
+				case int16:
+					seat = uint8(v)
+				case int32:
+					seat = uint8(v)
+				case int64:
+					seat = uint8(v)
+				case uint:
+					seat = uint8(v)
+				case uint8:
+					seat = v
+				case uint16:
+					seat = uint8(v)
+				case uint32:
+					seat = uint8(v)
+				case uint64:
+					seat = uint8(v)
+				case float32:
+					seat = uint8(v)
+				case float64:
+					seat = uint8(v)
+				}
+			}
+
+			// Calculate and inject deviceId
+			if seat > 0 {
+				deviceId := GetDeviceIdFromMiddleIdAndSeat(proxyId, seat)
+				deviceMap["deviceId"] = deviceId
+				updated = true
+			}
+		}
+	}
+
+	// If we modified the data, marshal it back to DataMsgpack
+	if updated {
+		if newData, err := msgpack.Marshal(dataMap); err == nil {
+			msg.DataMsgpack = newData
+		} else {
+			logs.Error("[MiddleRtcClient] Failed to re-marshal data for F=6: %v", err)
+		}
+	}
 }
 
 func (c *Core) MiddleRtc收到屏幕旋转事件(deviceId uint64, msg *public.Message) {
