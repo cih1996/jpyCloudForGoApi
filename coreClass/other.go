@@ -294,5 +294,10 @@ func NewCore() *Core {
 	S.HttpUrl = configret.HttpUrl
 	S.WsUrl = configret.WsUrl
 	logs.Info("配置的系统信息:%s,%s,%s,%s", S.R系统名称, S.R系统TenantName, S.HttpUrl, S.WsUrl)
+
+	startHeartbeatOnce.Do(func() {
+		go S.MiddleRtc批量心跳()
+		go S.Rtc批量检查心跳()
+	})
 	return S
 }

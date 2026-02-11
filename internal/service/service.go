@@ -8,6 +8,7 @@ import (
 	"port-mapping-demo/internal/config"
 	"port-mapping-demo/internal/manager"
 	"port-mapping-demo/internal/model"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,6 +95,11 @@ func EnsureLogin(key string) error {
 	// Set reconnection callback for auto-reconnection
 	manager.GetInstance().Core.ReconnectCallback = func(proxyId uint64) {
 		logs.Info("Attempting to reconnect proxy %d", proxyId)
+		if _, loaded := manager.GetInstance().Core.ReconnectInProgress.LoadOrStore(proxyId, struct{}{}); loaded {
+			logs.Info("Reconnect already in progress for proxy %d, skipping", proxyId)
+			return
+		}
+		defer manager.GetInstance().Core.ReconnectInProgress.Delete(proxyId)
 		// Ensure globalApi is available
 		if globalApi == nil {
 			logs.Error("Cannot reconnect proxy %d: globalApi is nil", proxyId)
@@ -106,9 +112,26 @@ func EnsureLogin(key string) error {
 		})
 		if errApi != nil {
 			logs.Error("Reconnect proxy %d failed: get rtc token failed: %s", proxyId, errApi.Msg)
+			if strings.Contains(errApi.Msg, "超时") || strings.Contains(strings.ToLower(errApi.Msg), "timeout") {
+				loginLock.Lock()
+				key := currentKey
+				loginLock.Unlock()
+				if key != "" {
+					logs.Info("Reconnect proxy %d: forcing relogin after timeout", proxyId)
+					if err := forceRelogin(key); err == nil {
+						rtcRes, errApi = globalApi.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
+							TbProxyId: &pId,
+						})
+						if errApi == nil {
+							goto BUILD_TOKEN
+						}
+					}
+				}
+			}
 			return
 		}
 
+	BUILD_TOKEN:
 		rtcToken := coreClass.RtcToken{
 			UserId:   0,
 			DeviceId: 0,
@@ -138,6 +161,18 @@ func EnsureLogin(key string) error {
 	}
 
 	return nil
+}
+
+func forceRelogin(key string) error {
+	if key == "" {
+		return fmt.Errorf("secret key is required")
+	}
+	loginLock.Lock()
+	currentKey = ""
+	s = nil
+	globalApi = nil
+	loginLock.Unlock()
+	return EnsureLogin(key)
 }
 
 // GetGlobalApi returns the global AdminApi instance

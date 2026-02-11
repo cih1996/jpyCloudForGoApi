@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"port-mapping-demo/pkg/logger"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +104,9 @@ func UnifiedWSHandler(c *gin.Context) {
 	}
 	defer ws.Close()
 
+	clientAddr := c.ClientIP()
+	logger.LogInfo("[Unified] WS connected: client=%s", clientAddr)
+
 	// Use a mutex to ensure thread-safe writing to the websocket
 	var writeMutex sync.Mutex
 
@@ -127,6 +131,7 @@ func UnifiedWSHandler(c *gin.Context) {
 				_ = ws.SetWriteDeadline(time.Now().Add(wsWriteWait))
 				if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
 					writeMutex.Unlock()
+					logger.LogError("[Unified] WS ping error: client=%s err=%v", clientAddr, err)
 					logs.Error("WebSocket ping error: %v", err)
 					return
 				}
@@ -153,13 +158,21 @@ func UnifiedWSHandler(c *gin.Context) {
 		// Read message
 		_, message, err := ws.ReadMessage()
 		if err != nil {
+			if ce, ok := err.(*websocket.CloseError); ok {
+				logger.LogError("[Unified] WS closed: client=%s code=%d text=%s", clientAddr, ce.Code, ce.Text)
+			} else {
+				logger.LogError("[Unified] WS read error: client=%s err=%v", clientAddr, err)
+			}
 			logs.Error("WebSocket read error: %v", err)
 			break
 		}
 
+		logger.LogInfo("[Unified] WS recv: client=%s bytes=%d payload=%s", clientAddr, len(message), previewPayload(message))
+
 		go func(msg []byte) {
 			var req UnifiedRequest
 			if err := json.Unmarshal(msg, &req); err != nil {
+				logger.LogError("[Unified] Invalid JSON: client=%s err=%v payload=%s", clientAddr, err, previewPayload(msg))
 				sendWSResponse(ws, &writeMutex, &UnifiedResponse{
 					Code: 400,
 					Msg:  "Invalid JSON format",
@@ -205,6 +218,7 @@ func sendWSResponse(ws *websocket.Conn, mu *sync.Mutex, res *UnifiedResponse) {
 	}
 	_ = ws.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	if err := ws.WriteJSON(res); err != nil {
+		logger.LogError("[Unified] WS write error: Type=%s, Seq=%d, err=%v", res.Type, res.Seq, err)
 		logs.Error("WebSocket write error: %v", err)
 	}
 }
@@ -304,8 +318,24 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest, ws *websocke
 }
 
 func handleLogin(token string) error {
+	if token == "" {
+		logger.LogError("[Unified] Login failed: empty token")
+		return fmt.Errorf("token is required")
+	}
 	unifiedKey = token // Save token for later use
 	return EnsureLogin(token)
+}
+
+func previewPayload(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	const maxLen = 512
+	s := strings.TrimSpace(string(b))
+	if len(s) > maxLen {
+		return s[:maxLen] + "...(truncated)"
+	}
+	return s
 }
 
 func ensureGlobalApi() error {

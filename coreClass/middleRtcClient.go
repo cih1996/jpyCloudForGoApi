@@ -521,7 +521,7 @@ func (c *Core) 公共Rtc连接成功(conn netclient.NetClient) {
 
 }
 func (c *Core) Middlertc线程调用连接成功(conn netclient.NetClient) {
-	logs.Info("[MiddleRtcClient]公共中间件连接成功,mid=%d", conn.Extra().(uint64))
+	logs.Info("[MiddleRtcClient]公共中间件连接成功,mid=%d,session=%d,name=%s", conn.Extra().(uint64), conn.SessionId(), conn.Name())
 	middleId := conn.Extra().(uint64)
 	var MidRtc MiddleRtc
 	MidRtc.middleId = middleId
@@ -565,7 +565,7 @@ func (c *Core) 公共Rtc连接断开(conn netclient.NetClient) {
 	c.Middlertc线程调用连接断开(conn)
 }
 func (c *Core) Middlertc线程调用连接断开(conn netclient.NetClient) {
-	logs.Info("[MiddleRtcClient]公共中间件断开入口,mid=%d", conn.Extra().(uint64))
+	logs.Info("[MiddleRtcClient]公共中间件断开入口,mid=%d,session=%d,name=%s", conn.Extra().(uint64), conn.SessionId(), conn.Name())
 	mid := conn.Extra().(uint64)
 	MidRtc, ok := c.MidGetConn(mid)
 	if ok {

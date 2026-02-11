@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"adminApi/rtcCtl"
 	"adminApi/userDeviceCtl"
 	"port-mapping-demo/coreClass"
 	"port-mapping-demo/internal/manager"
+	"port-mapping-demo/pkg/logger"
 
 	"github.com/ghp3000/logs"
 	"github.com/ghp3000/public"
@@ -59,12 +61,45 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 
 	// 4. 遍历每个中间件，确保连接并发送命令
 	for proxyId, targetDevIds := range proxyGroups {
-		maxRetries := 1 // 设置最大重试次数
+		maxRetries := 1 // 仅在超时场景自动重试
 		for retry := 0; retry <= maxRetries; retry++ {
+			// 5. 构造命令（放在前面，避免跳转问题）
+			cmd := coreClass.GenericCommand{
+				F:    f,
+				Data: data,
+				Req:  req,
+			}
+
 			// 使用 ProxyId 作为连接 Key
 			_, connected := core.MidGetConn(proxyId)
 			if !connected {
+				if _, loaded := core.ReconnectInProgress.LoadOrStore(proxyId, struct{}{}); loaded {
+					// Another goroutine is reconnecting this proxy; wait briefly for it to finish.
+					for i := 0; i < 20; i++ {
+						time.Sleep(200 * time.Millisecond)
+						if _, ok := core.MidGetConn(proxyId); ok {
+							connected = true
+							break
+						}
+					}
+					if connected {
+						logs.Info("[device_control] Proxy %d connected by another goroutine, reusing connection", proxyId)
+						logger.LogInfo("[Unified] Proxy %d connected by another goroutine, reusing connection", proxyId)
+					}
+					// Still not connected, continue with our own attempt.
+				}
+				defer core.ReconnectInProgress.Delete(proxyId)
 				logs.Info("[device_control] Proxy %d not connected, initiating connection... (Attempt %d/%d)", proxyId, retry+1, maxRetries+1)
+				logger.LogInfo("[Unified] Proxy %d not connected, initiating connection (attempt %d/%d)", proxyId, retry+1, maxRetries+1)
+
+				if globalApi == nil {
+					if err := forceRelogin(key); err != nil {
+						return nil, err
+					}
+				}
+				if globalApi == nil {
+					return nil, fmt.Errorf("globalApi is nil")
+				}
 
 				// 4.1 获取中间件 RTC Token
 				pId := int64(proxyId)
@@ -72,9 +107,16 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 					TbProxyId: &pId,
 				})
 				if errApi != nil {
+					if isTimeoutMsg(errApi.Msg) {
+						logger.LogError("[Unified] Get rtc token timeout for proxy %d: %s", proxyId, errApi.Msg)
+						if err := forceRelogin(key); err != nil {
+							logger.LogError("[Unified] Relogin failed after timeout: %v", err)
+						}
+					}
 					// 如果获取token失败，且还有重试机会，则继续重试
 					if retry < maxRetries {
 						logs.Warn("[device_control] Get rtc token failed for proxy %d: %s. Retrying...", proxyId, errApi.Msg)
+						logger.LogError("[Unified] Get rtc token failed for proxy %d: %s", proxyId, errApi.Msg)
 						time.Sleep(1 * time.Second)
 						continue
 					}
@@ -102,6 +144,7 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 					if _, ok := core.MidGetConn(proxyId); ok {
 						connected = true
 						logs.Info("[device_control] Proxy %d connected successfully", proxyId)
+						logger.LogInfo("[Unified] Proxy %d connected successfully", proxyId)
 						break
 					}
 				}
@@ -109,35 +152,34 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 					// 连接超时，如果还有重试机会，继续
 					if retry < maxRetries {
 						logs.Warn("[device_control] Timeout waiting for proxy %d connection. Retrying...", proxyId)
+						logger.LogError("[Unified] Timeout waiting for proxy %d connection. Retrying...", proxyId)
 						continue
 					}
 					return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
 				}
 			} else {
 				logs.Info("[device_control] Proxy %d already connected, reusing connection", proxyId)
-			}
-
-			// 5. 构造并发送命令
-			cmd := coreClass.GenericCommand{
-				F:    f,
-				Data: data,
-				Req:  req,
+				logger.LogInfo("[Unified] Proxy %d already connected, reusing connection", proxyId)
 			}
 
 			// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
 			res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
 			if err != nil {
 				logs.Error("[device_control] Send command to proxy %d failed: %v", proxyId, err)
+				logger.LogError("[Unified] Send command failed: proxy=%d err=%v", proxyId, err)
 
-				// 发生错误时（如超时），强制关闭连接，确保下次请求触发重连
-				logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
-				CloseMiddleConnection(proxyId)
-
-				// 如果还有重试机会，继续重试
-				if retry < maxRetries {
-					logs.Info("[device_control] Retrying command for proxy %d (Attempt %d/%d)...", proxyId, retry+2, maxRetries+1)
+				// 仅在超时场景自动断开并重试
+				if isSync && isTimeoutErr(err) && retry < maxRetries {
+					logs.Info("[device_control] Timeout on proxy %d, reconnecting and retrying...", proxyId)
+					logger.LogInfo("[Unified] Timeout on proxy %d, reconnecting and retrying", proxyId)
+					CloseMiddleConnection(proxyId)
 					continue
 				}
+
+				// 非超时错误：关闭连接以便下次重连
+				logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
+				logger.LogInfo("[Unified] Force closing proxy %d due to send failure", proxyId)
+				CloseMiddleConnection(proxyId)
 
 				// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
 				if isSync {
@@ -166,6 +208,18 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 	}
 
 	return nil, nil
+}
+
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout")
+}
+
+func isTimeoutMsg(msg string) bool {
+	return strings.Contains(msg, "超时") || strings.Contains(strings.ToLower(msg), "timeout")
 }
 
 // CloseMiddleConnection explicitly closes the middleware connection for a device
