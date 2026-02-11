@@ -59,79 +59,102 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 
 	// 4. 遍历每个中间件，确保连接并发送命令
 	for proxyId, targetDevIds := range proxyGroups {
-		// 使用 ProxyId 作为连接 Key
-		_, connected := core.MidGetConn(proxyId)
-		if !connected {
-			logs.Info("[device_control] Proxy %d not connected, initiating connection...", proxyId)
+		maxRetries := 1 // 设置最大重试次数
+		for retry := 0; retry <= maxRetries; retry++ {
+			// 使用 ProxyId 作为连接 Key
+			_, connected := core.MidGetConn(proxyId)
+			if !connected {
+				logs.Info("[device_control] Proxy %d not connected, initiating connection... (Attempt %d/%d)", proxyId, retry+1, maxRetries+1)
 
-			// 4.1 获取中间件 RTC Token
-			pId := int64(proxyId)
-			rtcRes, errApi := globalApi.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
-				TbProxyId: &pId,
-			})
-			if errApi != nil {
-				return nil, fmt.Errorf("proxy %d get rtc token failed: %s", proxyId, errApi.Msg)
+				// 4.1 获取中间件 RTC Token
+				pId := int64(proxyId)
+				rtcRes, errApi := globalApi.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
+					TbProxyId: &pId,
+				})
+				if errApi != nil {
+					// 如果获取token失败，且还有重试机会，则继续重试
+					if retry < maxRetries {
+						logs.Warn("[device_control] Get rtc token failed for proxy %d: %s. Retrying...", proxyId, errApi.Msg)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+					return nil, fmt.Errorf("proxy %d get rtc token failed: %s", proxyId, errApi.Msg)
+				}
+
+				// 4.2 构造 RtcToken
+				// 注意：Host 字段被用作存储连接的 Key，这里设为 ProxyId
+				rtcToken := coreClass.RtcToken{
+					UserId:   0,
+					DeviceId: 0, // 连接是中间件级别的，不绑定特定设备
+					HostUrl:  rtcRes.Url,
+					Token:    rtcRes.Token,
+					GuestUrl: rtcRes.Url,
+					Host:     fmt.Sprintf("%d", proxyId),
+				}
+
+				// 4.3 连接中间件
+				core.MiddleRtcConnect(rtcToken)
+
+				// 4.4 等待连接建立
+				connected = false
+				for i := 0; i < 20; i++ {
+					time.Sleep(200 * time.Millisecond)
+					if _, ok := core.MidGetConn(proxyId); ok {
+						connected = true
+						logs.Info("[device_control] Proxy %d connected successfully", proxyId)
+						break
+					}
+				}
+				if !connected {
+					// 连接超时，如果还有重试机会，继续
+					if retry < maxRetries {
+						logs.Warn("[device_control] Timeout waiting for proxy %d connection. Retrying...", proxyId)
+						continue
+					}
+					return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
+				}
+			} else {
+				logs.Info("[device_control] Proxy %d already connected, reusing connection", proxyId)
 			}
 
-			// 4.2 构造 RtcToken
-			// 注意：Host 字段被用作存储连接的 Key，这里设为 ProxyId
-			rtcToken := coreClass.RtcToken{
-				UserId:   0,
-				DeviceId: 0, // 连接是中间件级别的，不绑定特定设备
-				HostUrl:  rtcRes.Url,
-				Token:    rtcRes.Token,
-				GuestUrl: rtcRes.Url,
-				Host:     fmt.Sprintf("%d", proxyId),
+			// 5. 构造并发送命令
+			cmd := coreClass.GenericCommand{
+				F:    f,
+				Data: data,
+				Req:  req,
 			}
 
-			// 4.3 连接中间件
-			core.MiddleRtcConnect(rtcToken)
+			// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
+			res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
+			if err != nil {
+				logs.Error("[device_control] Send command to proxy %d failed: %v", proxyId, err)
 
-			// 4.4 等待连接建立
-			connected = false
-			for i := 0; i < 20; i++ {
-				time.Sleep(200 * time.Millisecond)
-				if _, ok := core.MidGetConn(proxyId); ok {
-					connected = true
-					logs.Info("[device_control] Proxy %d connected successfully", proxyId)
-					break
+				// 发生错误时（如超时），强制关闭连接，确保下次请求触发重连
+				logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
+				CloseMiddleConnection(proxyId)
+
+				// 如果还有重试机会，继续重试
+				if retry < maxRetries {
+					logs.Info("[device_control] Retrying command for proxy %d (Attempt %d/%d)...", proxyId, retry+2, maxRetries+1)
+					continue
+				}
+
+				// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
+				if isSync {
+					return nil, err
 				}
 			}
-			if !connected {
-				return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
+
+			if isSync && res != nil {
+				if resSlice, ok := res.([]interface{}); ok {
+					allResults = append(allResults, resSlice...)
+				} else {
+					allResults = append(allResults, res)
+				}
 			}
-		} else {
-			logs.Info("[device_control] Proxy %d already connected, reusing connection", proxyId)
-		}
-
-		// 5. 构造并发送命令
-		cmd := coreClass.GenericCommand{
-			F:    f,
-			Data: data,
-			Req:  req,
-		}
-
-		// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
-		res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
-		if err != nil {
-			logs.Error("[device_control] Send command to proxy %d failed: %v", proxyId, err)
-
-			// 发生错误时（如超时），强制关闭连接，确保下次请求触发重连
-			logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
-			CloseMiddleConnection(proxyId)
-
-			// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
-			if isSync {
-				return nil, err
-			}
-		}
-
-		if isSync && res != nil {
-			if resSlice, ok := res.([]interface{}); ok {
-				allResults = append(allResults, resSlice...)
-			} else {
-				allResults = append(allResults, res)
-			}
+			
+			// 成功执行或不需要重试，退出重试循环
+			break
 		}
 	}
 

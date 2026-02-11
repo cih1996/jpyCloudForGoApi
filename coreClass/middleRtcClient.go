@@ -12,6 +12,8 @@ import (
 	"github.com/ghp3000/public"
 	"github.com/goccy/go-json"
 	"github.com/vmihailenco/msgpack/v5"
+
+	"cnb.cool/accbot/goTool/toolPkg"
 )
 
 // MiddleRtcConnect 打洞连接中间件
@@ -63,6 +65,28 @@ func (c *Core) onRtcData(a *bufferPool.Packet, conn netclient.NetClient) bool {
 		}
 		break
 	case bufferPool.TypeMsgpack:
+		// 检测是否包含gzip头
+		content := a.ContentRaw()
+		offset := -1
+		for i := 0; i < len(content) && i < 32; i++ {
+			if i+1 < len(content) && content[i] == 0x1f && content[i+1] == 0x8b {
+				offset = i
+				break
+			}
+		}
+
+		if offset != -1 {
+			// 解压
+			decompressed, err := toolPkg.GzipDecode(content[offset:])
+			if err != nil {
+				logs.Error("[MiddleRtcClient]Gzip解压失败: %v", err)
+			} else {
+				// 替换内容
+				a.WriteContent(decompressed)
+				a.Length = uint32(len(a.Buff))
+			}
+		}
+
 		var msg public.Message
 		if err := a.Unmarshal(&msg); err != nil {
 			logs.Error("[MiddleRtcClient]收到的msgpack数据反序列化失败,", err)
