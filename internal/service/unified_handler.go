@@ -304,6 +304,8 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest, ws *websocke
 		res.Data, err = handleGetDeviceDetail(req.Data)
 	case "getDeviceStatus":
 		res.Data, err = handleGetDeviceStatus(req.Data)
+	case "getRoot":
+		res.Data, err = handleGetRoot(req.Data)
 	default:
 		res.Code = 404
 		res.Msg = "Unknown request type"
@@ -812,6 +814,42 @@ func handleSetLocation(data interface{}) (interface{}, error) {
 	}
 
 	return results, nil
+}
+
+func handleGetRoot(data interface{}) (interface{}, error) {
+	// Expected data: { "deviceId": 123, "pkg": "com.android.shell" }
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid data format")
+	}
+
+	deviceIdVal, ok := m["deviceId"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("deviceId missing or invalid")
+	}
+	deviceId := uint64(deviceIdVal)
+
+	// pkg is optional, defaults to "com.android.shell" if not present
+	pkgName := "com.android.shell"
+	if v, ok := m["pkg"].(string); ok && v != "" {
+		pkgName = v
+	}
+
+	info, err := findDeviceInfoWithCache(deviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"pkg": pkgName,
+	}
+
+	// F=516 for Get Root
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 516, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
 }
 
 func handleExecShell(data interface{}) (interface{}, error) {
