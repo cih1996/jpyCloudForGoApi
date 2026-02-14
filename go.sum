@@ -14,8 +14,8 @@ cloud.google.com/go/pubsub v1.0.1/go.mod h1:R0Gpsv3s54REJCy4fxDixWD93lHJMoZTyQ2k
 cloud.google.com/go/pubsub v1.1.0/go.mod h1:EwwdRX2sKPjnvnqCa270oGRyludottCI76h+R3AArQw=
 cloud.google.com/go/storage v1.0.0/go.mod h1:IhtSnM/ZTZV8YYJWCY8RULGVqBDmpoyjwiyrjsg+URw=
 cloud.google.com/go/storage v1.5.0/go.mod h1:tpKbwo567HUNpVclU5sGELwQWBDZ8gh0ZeosJ0Rtdos=
-cnb.cool/accbot/goTool v1.0.33 h1:MN3eC4ENicXnj4q0hVbGVAZd5J/j66R+7h04kORLc3Y=
-cnb.cool/accbot/goTool v1.0.33/go.mod h1:X9Dh86xB/Ytk+AYsaoC3HxkVPN8H8MzU4TuF9+Ji08E=
+cnb.cool/accbot/goTool v1.0.51 h1:oqDnv+UTZ2pYpIc3qTrbA4D+J7Oy3bNFF+nzo5+V2L8=
+cnb.cool/accbot/goTool v1.0.51/go.mod h1:X9Dh86xB/Ytk+AYsaoC3HxkVPN8H8MzU4TuF9+Ji08E=
 cnb.cool/htsystem/adminApi v1.0.3 h1:Yv6xFhMbayl91O+/rxE4M7SLyvRJ6phOPULbq0/qfs8=
 cnb.cool/htsystem/adminApi v1.0.3/go.mod h1:/c1ZtGdq1K61rWKGf/LxwsF7lFY/gYBvaHpHHhbSV90=
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=

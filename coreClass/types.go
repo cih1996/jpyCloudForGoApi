@@ -27,6 +27,7 @@ const (
 
 var (
 	S *Core
+	startHeartbeatOnce sync.Once
 )
 
 type Core struct {
@@ -90,6 +91,7 @@ type Core struct {
 	LogoutCallback         func()
 	ReconnectCallback      func(proxyId uint64)
 	CallbackUnifiedMiddlewareMessage func(proxyId uint64, deviceId uint64, msgType int, data interface{})
+	ReconnectInProgress    sync.Map // proxyId -> struct{}, to avoid concurrent reconnect storms
 
 	R系统名称             string
 	HttpUrl           string

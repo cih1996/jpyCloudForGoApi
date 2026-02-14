@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"port-mapping-demo/pkg/logger"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,20 +28,34 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+const (
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 120 * time.Second
+	wsPingPeriod = (wsPongWait * 9) / 10
+)
+
 // ClientManager manages connected WebSocket clients
 type ClientManager struct {
-	clients map[*websocket.Conn]*sync.Mutex
+	clients map[*websocket.Conn]*ClientInfo
 	lock    sync.RWMutex
 }
 
+type ClientInfo struct {
+	mu            *sync.Mutex
+	logSubscribed bool
+}
+
 var unifiedClientManager = ClientManager{
-	clients: make(map[*websocket.Conn]*sync.Mutex),
+	clients: make(map[*websocket.Conn]*ClientInfo),
 }
 
 func (manager *ClientManager) register(ws *websocket.Conn, mu *sync.Mutex) {
 	manager.lock.Lock()
 	defer manager.lock.Unlock()
-	manager.clients[ws] = mu
+	manager.clients[ws] = &ClientInfo{
+		mu:            mu,
+		logSubscribed: false,
+	}
 }
 
 func (manager *ClientManager) unregister(ws *websocket.Conn) {
@@ -53,11 +69,24 @@ func (manager *ClientManager) unregister(ws *websocket.Conn) {
 func (manager *ClientManager) broadcast(res *UnifiedResponse) {
 	manager.lock.RLock()
 	defer manager.lock.RUnlock()
-	for ws, mu := range manager.clients {
+	for ws, info := range manager.clients {
+		// Filter log stream: only send if client is subscribed
+		if res.Type == "LogStream" && !info.logSubscribed {
+			continue
+		}
+
 		// Send asynchronously to avoid blocking
 		go func(w *websocket.Conn, m *sync.Mutex) {
 			sendWSResponse(w, m, res)
-		}(ws, mu)
+		}(ws, info.mu)
+	}
+}
+
+func (manager *ClientManager) setLogSubscription(ws *websocket.Conn, subscribed bool) {
+	manager.lock.Lock()
+	defer manager.lock.Unlock()
+	if info, ok := manager.clients[ws]; ok {
+		info.logSubscribed = subscribed
 	}
 }
 
@@ -75,6 +104,9 @@ func UnifiedWSHandler(c *gin.Context) {
 	}
 	defer ws.Close()
 
+	clientAddr := c.ClientIP()
+	logger.LogInfo("[Unified] WS connected: client=%s", clientAddr)
+
 	// Use a mutex to ensure thread-safe writing to the websocket
 	var writeMutex sync.Mutex
 
@@ -82,19 +114,65 @@ func UnifiedWSHandler(c *gin.Context) {
 	unifiedClientManager.register(ws, &writeMutex)
 	defer unifiedClientManager.unregister(ws)
 
+	// Keepalive: extend read deadline on pong, and periodically ping.
+	ws.SetReadDeadline(time.Now().Add(wsPongWait))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+
+	pingTicker := time.NewTicker(wsPingPeriod)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-pingTicker.C:
+				writeMutex.Lock()
+				_ = ws.SetWriteDeadline(time.Now().Add(wsWriteWait))
+				if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+					writeMutex.Unlock()
+					logger.LogError("[Unified] WS ping error: client=%s err=%v", clientAddr, err)
+					logs.Error("WebSocket ping error: %v", err)
+					return
+				}
+				writeMutex.Unlock()
+			case <-done:
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(done)
+		pingTicker.Stop()
+	}()
+
+	logger.SetLogBroadcaster(func(logLine string) {
+		BroadcastToUnifiedClients(&UnifiedResponse{
+			Type: "LogStream",
+			Code: 200,
+			Data: logLine,
+		})
+	})
+
 	for {
 		// Read message
 		_, message, err := ws.ReadMessage()
 		if err != nil {
+			if ce, ok := err.(*websocket.CloseError); ok {
+				logger.LogError("[Unified] WS closed: client=%s code=%d text=%s", clientAddr, ce.Code, ce.Text)
+			} else {
+				logger.LogError("[Unified] WS read error: client=%s err=%v", clientAddr, err)
+			}
 			logs.Error("WebSocket read error: %v", err)
 			break
 		}
 
-		// Process in a goroutine to handle multiple requests concurrently if needed
-		// But for now, we can do it synchronously to ensure order, or async with captured loop variables
+		logger.LogInfo("[Unified] WS recv: client=%s bytes=%d payload=%s", clientAddr, len(message), previewPayload(message))
+
 		go func(msg []byte) {
 			var req UnifiedRequest
 			if err := json.Unmarshal(msg, &req); err != nil {
+				logger.LogError("[Unified] Invalid JSON: client=%s err=%v payload=%s", clientAddr, err, previewPayload(msg))
 				sendWSResponse(ws, &writeMutex, &UnifiedResponse{
 					Code: 400,
 					Msg:  "Invalid JSON format",
@@ -102,18 +180,24 @@ func UnifiedWSHandler(c *gin.Context) {
 				return
 			}
 
-			// Call the existing logic
-			// We create a background context since the request context might be cancelled if connection closes?
-			// Actually, if connection closes, we probably want to stop.
-			// But for now context.Background() is safe for the handler logic.
-			res, err := HandleUnifiedRequest(context.Background(), &req)
+			// Log processing for non-heartbeat requests to avoid spam
+			isHeartbeat := req.Type == "Ping" || req.Type == "ping" || req.Type == "Heartbeat" || req.Type == "heartbeat"
+			if !isHeartbeat {
+				logger.LogInfo("[Unified] Processing request: Type=%s, Seq=%d, Data=%+v", req.Type, req.Seq, req.Data)
+			}
+			res, err := HandleUnifiedRequest(context.Background(), &req, ws)
 			if err != nil {
+				logger.LogError("[Unified] Request failed: Type=%s, Seq=%d, Error=%v", req.Type, req.Seq, err)
 				// Should have been handled inside, but just in case
 				res = &UnifiedResponse{
 					Type: req.Type,
 					Seq:  req.Seq,
 					Code: 500,
 					Msg:  err.Error(),
+				}
+			} else {
+				if !isHeartbeat {
+					logger.LogInfo("[Unified] Request success: Type=%s, Seq=%d", req.Type, req.Seq)
 				}
 			}
 
@@ -125,7 +209,16 @@ func UnifiedWSHandler(c *gin.Context) {
 func sendWSResponse(ws *websocket.Conn, mu *sync.Mutex, res *UnifiedResponse) {
 	mu.Lock()
 	defer mu.Unlock()
+	// Prevent infinite loop: do not log LogStream responses
+	// Also suppress Heartbeat/Ping responses to avoid spam
+	isHeartbeat := res.Type == "Ping" || res.Type == "ping" || res.Type == "Heartbeat" || res.Type == "heartbeat"
+	if res.Type != "LogStream" && !isHeartbeat {
+		// Log detailed response data for debugging
+		logger.LogInfo("[Unified] Sending response: Type=%s, Seq=%d, Code=%d, Data=%+v", res.Type, res.Seq, res.Code, res.Data)
+	}
+	_ = ws.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	if err := ws.WriteJSON(res); err != nil {
+		logger.LogError("[Unified] WS write error: Type=%s, Seq=%d, err=%v", res.Type, res.Seq, err)
 		logs.Error("WebSocket write error: %v", err)
 	}
 }
@@ -149,13 +242,14 @@ type UnifiedResponse struct {
 	Seq  int         `json:"seq,omitempty"`
 }
 
-// HandleUnifiedRequest handles all incoming unified requests
-func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedResponse, error) {
-	// For non-login requests, ensure globalApi is available
-	// Note: Authentication should be handled by middleware or check here if token is provided
-	// For simplicity, we assume the session is already established via EnsureLogin elsewhere or globalApi is ready
-	// If token is provided in Login request, we handle it.
+// HandleUnifiedRequestHTTP is a wrapper for HTTP requests (which don't have a WebSocket connection)
+func HandleUnifiedRequestHTTP(ctx context.Context, req *UnifiedRequest) (*UnifiedResponse, error) {
+	// For HTTP requests, ws is nil
+	return HandleUnifiedRequest(ctx, req, nil)
+}
 
+// HandleUnifiedRequest handles all incoming unified requests
+func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest, ws *websocket.Conn) (*UnifiedResponse, error) {
 	res := &UnifiedResponse{
 		Type: req.Type,
 		Seq:  req.Seq,
@@ -168,6 +262,8 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedRes
 	switch req.Type {
 	case "Login":
 		err = handleLogin(req.Token)
+	case "Ping", "ping", "Heartbeat", "heartbeat":
+		res.Msg = "pong"
 	case "GetDeviceList":
 		res.Data, err = handleGetDeviceList()
 	case "Changephones":
@@ -184,6 +280,14 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedRes
 		res.Data, err = handleHideApp(req.Data)
 	case "setSocket5":
 		res.Data, err = handleSetSocket5(req.Data)
+	case "startLogStream":
+		// Enable log streaming for this client
+		unifiedClientManager.setLogSubscription(ws, true)
+		res.Msg = "Log stream started"
+	case "stopLogStream":
+		// Disable log streaming for this client
+		unifiedClientManager.setLogSubscription(ws, false)
+		res.Msg = "Log stream stopped"
 	case "getSocket5":
 		res.Data, err = handleGetSocket5(req.Data)
 	case "getS5outLine":
@@ -200,6 +304,8 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedRes
 		res.Data, err = handleGetDeviceDetail(req.Data)
 	case "getDeviceStatus":
 		res.Data, err = handleGetDeviceStatus(req.Data)
+	case "getRoot":
+		res.Data, err = handleGetRoot(req.Data)
 	default:
 		res.Code = 404
 		res.Msg = "Unknown request type"
@@ -214,13 +320,41 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest) (*UnifiedRes
 }
 
 func handleLogin(token string) error {
+	if token == "" {
+		logger.LogError("[Unified] Login failed: empty token")
+		return fmt.Errorf("token is required")
+	}
 	unifiedKey = token // Save token for later use
 	return EnsureLogin(token)
 }
 
+func previewPayload(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	const maxLen = 512
+	s := strings.TrimSpace(string(b))
+	if len(s) > maxLen {
+		return s[:maxLen] + "...(truncated)"
+	}
+	return s
+}
+
+func ensureGlobalApi() error {
+	if globalApi != nil {
+		return nil
+	}
+	if unifiedKey == "" {
+		return fmt.Errorf("not logged in")
+	}
+	// Try to re-login
+	logger.LogInfo("[Unified] globalApi is nil, attempting auto-relogin with existing token")
+	return handleLogin(unifiedKey)
+}
+
 func handleGetDeviceList() (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 
 	// Default to page 1, large size to get all
@@ -242,8 +376,8 @@ func handleGetDeviceList() (interface{}, error) {
 // For Changephones (Type 3)
 // Data: [{"deviceId":..., "type":"changeDevice", "func":1, "paramsAll":...}]
 func handleChangePhones(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -264,8 +398,8 @@ func handleChangePhones(data interface{}) (interface{}, error) {
 }
 
 func handleGetAppList(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -300,8 +434,8 @@ func handleGetAppList(data interface{}) (interface{}, error) {
 }
 
 func handleGetTaskStatus(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -434,8 +568,8 @@ func handleGetDownloadProgress(data interface{}) (interface{}, error) {
 }
 
 func handleHideApp(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -479,8 +613,8 @@ func handleHideApp(data interface{}) (interface{}, error) {
 }
 
 func handleSetSocket5(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -492,10 +626,21 @@ func handleSetSocket5(data interface{}) (interface{}, error) {
 		Id       uint64 `json:"id"`
 		S5Url    string `json:"s5Url"`
 		NOutSwID int    `json:"nOutSwID"`
+		LineType int    `json:"lineType"`
 	}
 	var tempReq TempReq
 	if err := json.Unmarshal(dataBytes, &tempReq); err != nil {
 		return nil, fmt.Errorf("invalid data format for SetS5: %v", err)
+	}
+
+	if tempReq.NOutSwID == 0 {
+		if tempReq.LineType == 1 {
+			// If lineType is 1, default to 10006
+			tempReq.NOutSwID = 11211
+		} else if tempReq.LineType != 0 {
+			// If lineType is not 0 and not 1, return error
+			return nil, fmt.Errorf("unsupported line type: %d", tempReq.LineType)
+		}
 	}
 
 	targetId := tempReq.DeviceId
@@ -529,8 +674,8 @@ func handleGetSocket5(data interface{}) (interface{}, error) {
 }
 
 func handleGetS5outLine(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -572,8 +717,8 @@ func handleGetS5outLine(data interface{}) (interface{}, error) {
 }
 
 func handleGetUserFiles(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -611,10 +756,9 @@ func handleGetUserFiles(data interface{}) (interface{}, error) {
 }
 
 func handleSetLocation(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
-
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal data: %v", err)
@@ -670,6 +814,42 @@ func handleSetLocation(data interface{}) (interface{}, error) {
 	}
 
 	return results, nil
+}
+
+func handleGetRoot(data interface{}) (interface{}, error) {
+	// Expected data: { "deviceId": 123, "pkg": "com.android.shell" }
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid data format")
+	}
+
+	deviceIdVal, ok := m["deviceId"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("deviceId missing or invalid")
+	}
+	deviceId := uint64(deviceIdVal)
+
+	// pkg is optional, defaults to "com.android.shell" if not present
+	pkgName := "com.android.shell"
+	if v, ok := m["pkg"].(string); ok && v != "" {
+		pkgName = v
+	}
+
+	info, err := findDeviceInfoWithCache(deviceId)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"pkg": pkgName,
+	}
+
+	// F=516 for Get Root
+	res, err := SendGenericCommandToDevice(unifiedKey, []DeviceCommandInfo{*info}, 516, payload, true, true, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return processResponse(res), nil
 }
 
 func handleExecShell(data interface{}) (interface{}, error) {
@@ -743,8 +923,8 @@ func handleStartApp(data interface{}) (interface{}, error) {
 }
 
 func handleGetDeviceDetail(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -779,8 +959,8 @@ func handleGetDeviceDetail(data interface{}) (interface{}, error) {
 }
 
 func handleGetDeviceStatus(data interface{}) (interface{}, error) {
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -860,8 +1040,8 @@ func findDeviceInfoWithCache(deviceId uint64) (*DeviceCommandInfo, error) {
 		return val.(*DeviceCommandInfo), nil
 	}
 
-	if globalApi == nil {
-		return nil, fmt.Errorf("not logged in")
+	if err := ensureGlobalApi(); err != nil {
+		return nil, err
 	}
 
 	// Refresh cache by fetching all devices

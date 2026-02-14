@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/vmihailenco/msgpack/v5"
 	"io"
 	"reflect"
 	"sync/atomic"
+
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 const MaxPacketSize = 10 * 1024 * 1024
@@ -185,6 +186,7 @@ func (s *Packet) ContentRaw() []byte {
 	headerL := 2 + uint32(s.HeaderLen())
 	return s.Buff[headerL:s.Length]
 }
+
 func (s *Packet) WriteContent(v []byte) {
 	contentLen := len(v)
 	hl := 2 + int(s.HeaderLen())

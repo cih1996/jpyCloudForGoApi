@@ -5,6 +5,7 @@ import (
 	"port-mapping-demo/internal/config"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/framework"
+	"port-mapping-demo/pkg/logger"
 
 	"github.com/ghp3000/logs"
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,26 @@ func main() {
 	config.LoadConfig()
 	logs.SetLevel("INFO", logs.LevelInfo)
 
+	// Add File Adapter for global logging
+	fileConfig := &logs.FileConfig{
+		Dir:         "logs",
+		FileName:    "system.log",
+		FileMaxSize: 10 * 1024 * 1024, // 10MB
+		FileMaxNum:  10,
+		RollType:    logs.RollingFile,
+	}
+	fileAdapter, err := logs.NewFileLog(logs.LevelInfo, fileConfig, 1000, "")
+	if err != nil {
+		logs.Error("Failed to create file logger: %v", err)
+	} else {
+		logs.AddAdapter(fileAdapter)
+	}
+
+	// Initialize Custom Logger
+	if err := logger.InitUnifiedLogger(); err != nil {
+		logs.Error("Failed to initialize unified logger: %v", err)
+	}
+
 	// Register Routes
 	framework.Register("POST", "/api/devices", "Get list of devices", service.GetDevices)
 	framework.Register("POST", "/api/mappings", "Get active mappings", service.GetMappings)
@@ -22,10 +43,16 @@ func main() {
 	framework.Register[service.MiddleCommandRequest, interface{}]("POST", "/api/middle", "Execute middleware command", service.MiddleExecuteCommand)
 	framework.Register("POST", "/api/config/update", "Update WebSocket configuration", service.UpdateConfig)
 	framework.Register("POST", "/api/config/get", "Get WebSocket configuration", service.GetConfig)
-	framework.Register("POST", "/api/unified", "Unified Request Handler", service.HandleUnifiedRequest)
+	framework.Register("POST", "/api/unified", "Unified Request Handler", service.HandleUnifiedRequestHTTP)
 
-	// Initialize Gin
+	// Add Log Download Endpoint
 	r := gin.Default()
+	r.GET("/api/logs/download", func(c *gin.Context) {
+		logFile := "logs/unified_service.log"
+		c.Header("Content-Disposition", "attachment; filename=unified_service.log")
+		c.Header("Content-Type", "application/octet-stream")
+		c.File(logFile)
+	})
 
 	// WebSocket support for Unified Request
 	r.GET("/api/unified/ws", service.UnifiedWSHandler)

@@ -3,8 +3,8 @@ module port-mapping-demo
 go 1.25.6
 
 require (
-	adminApi v1.0.3
-	cnb.cool/accbot/goTool v1.0.33
+	adminApi v1.0.4
+	cnb.cool/accbot/goTool v1.0.51
 	github.com/atotto/clipboard v0.1.4
 	github.com/ghp3000/logs v0.0.0-20251021070657-d99145b9acae
 	github.com/ghp3000/netclient v0.0.0-00010101000000-000000000000

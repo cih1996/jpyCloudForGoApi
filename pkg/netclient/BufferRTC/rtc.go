@@ -2,12 +2,14 @@ package BufferRTC
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ghp3000/netclient/bufferPool"
 	"github.com/ghp3000/netclient/netclient"
 	"github.com/ghp3000/netclient/webRTC"
 	"github.com/pion/webrtc/v4"
+	"port-mapping-demo/pkg/logger"
 )
 
 const name = "webrtc"
@@ -28,6 +30,18 @@ func New(id interface{}, urlString string, token string, isGuest bool, pool *buf
 	}
 	s := &RtcClient{extra: id, callback: callback, buf: pool, sessionId: time.Now().UnixNano()}
 	c := webRTC.NewClient(urlString, token, isGuest, s.onData)
+	c.SetLogger(func(f interface{}, v ...interface{}) {
+		msg := fmt.Sprint(f)
+		if len(v) > 0 {
+			if format, ok := f.(string); ok {
+				msg = fmt.Sprintf(format, v...)
+			} else {
+				args := append([]interface{}{f}, v...)
+				msg = fmt.Sprint(args...)
+			}
+		}
+		logger.LogInfo("[RTC] id=%v %s", id, msg)
+	})
 	c.Attach = id
 	c.SetOnChannelOpen(func(c *webRTC.Client, channel *webRTC.DataChannel) {
 		s.channel = channel

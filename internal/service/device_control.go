@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"adminApi/rtcCtl"
 	"adminApi/userDeviceCtl"
 	"port-mapping-demo/coreClass"
 	"port-mapping-demo/internal/manager"
+	"port-mapping-demo/pkg/logger"
 
 	"github.com/ghp3000/logs"
 	"github.com/ghp3000/public"
@@ -36,81 +38,165 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 	// 3. 按中间件分组设备
 	proxyGroups := make(map[uint64][]uint64)
 	for _, d := range deviceIds {
-		proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], d.DeviceId)
+		// Log extracted MiddleId and Seat for debugging
+		logs.Info("[device_control] Processing deviceId=%d, MiddleId=%d, Seat=%d",
+			d.DeviceId,
+			coreClass.GetMiddleIdFromDeviceId(d.DeviceId),
+			coreClass.GetSeatFromDeviceId(d.DeviceId))
+
+		// 如果 f=6，强制将 deviceId 设置为 0，因为这是直接发给中间件的指令
+		targetDeviceId := d.DeviceId
+		if f == 6 {
+			targetDeviceId = 0
+		}
+
+		if targetDeviceId == 0 {
+			proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], 0)
+		} else {
+			proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], targetDeviceId)
+		}
 	}
 
 	var allResults []interface{}
 
 	// 4. 遍历每个中间件，确保连接并发送命令
 	for proxyId, targetDevIds := range proxyGroups {
-		// 使用 ProxyId 作为连接 Key
-		_, connected := core.MidGetConn(proxyId)
-		if !connected {
-			logs.Info("Proxy %d not connected, initiating connection...", proxyId)
-
-			// 4.1 获取中间件 RTC Token
-			pId := int64(proxyId)
-			rtcRes, errApi := globalApi.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
-				TbProxyId: &pId,
-			})
-			if errApi != nil {
-				return nil, fmt.Errorf("proxy %d get rtc token failed: %s", proxyId, errApi.Msg)
+		maxRetries := 1 // 仅在超时场景自动重试
+		for retry := 0; retry <= maxRetries; retry++ {
+			// 5. 构造命令（放在前面，避免跳转问题）
+			cmd := coreClass.GenericCommand{
+				F:    f,
+				Data: data,
+				Req:  req,
 			}
 
-			// 4.2 构造 RtcToken
-			// 注意：Host 字段被用作存储连接的 Key，这里设为 ProxyId
-			rtcToken := coreClass.RtcToken{
-				UserId:   0,
-				DeviceId: 0, // 连接是中间件级别的，不绑定特定设备
-				HostUrl:  rtcRes.Url,
-				Token:    rtcRes.Token,
-				GuestUrl: rtcRes.Url,
-				Host:     fmt.Sprintf("%d", proxyId),
+			// 使用 ProxyId 作为连接 Key
+			_, connected := core.MidGetConn(proxyId)
+			if !connected {
+				if _, loaded := core.ReconnectInProgress.LoadOrStore(proxyId, struct{}{}); loaded {
+					// Another goroutine is reconnecting this proxy; wait briefly for it to finish.
+					for i := 0; i < 20; i++ {
+						time.Sleep(200 * time.Millisecond)
+						if _, ok := core.MidGetConn(proxyId); ok {
+							connected = true
+							break
+						}
+					}
+					if connected {
+						logs.Info("[device_control] Proxy %d connected by another goroutine, reusing connection", proxyId)
+						logger.LogInfo("[Unified] Proxy %d connected by another goroutine, reusing connection", proxyId)
+					}
+					// Still not connected, continue with our own attempt.
+				}
+				defer core.ReconnectInProgress.Delete(proxyId)
+				logs.Info("[device_control] Proxy %d not connected, initiating connection... (Attempt %d/%d)", proxyId, retry+1, maxRetries+1)
+				logger.LogInfo("[Unified] Proxy %d not connected, initiating connection (attempt %d/%d)", proxyId, retry+1, maxRetries+1)
+
+				if globalApi == nil {
+					if err := forceRelogin(key); err != nil {
+						return nil, err
+					}
+				}
+				if globalApi == nil {
+					return nil, fmt.Errorf("globalApi is nil")
+				}
+
+				// 4.1 获取中间件 RTC Token
+				pId := int64(proxyId)
+				rtcRes, errApi := globalApi.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
+					TbProxyId: &pId,
+				})
+				if errApi != nil {
+					if isTimeoutMsg(errApi.Msg) {
+						logger.LogError("[Unified] Get rtc token timeout for proxy %d: %s", proxyId, errApi.Msg)
+						if err := forceRelogin(key); err != nil {
+							logger.LogError("[Unified] Relogin failed after timeout: %v", err)
+						}
+					}
+					// 如果获取token失败，且还有重试机会，则继续重试
+					if retry < maxRetries {
+						logs.Warn("[device_control] Get rtc token failed for proxy %d: %s. Retrying...", proxyId, errApi.Msg)
+						logger.LogError("[Unified] Get rtc token failed for proxy %d: %s", proxyId, errApi.Msg)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+					return nil, fmt.Errorf("proxy %d get rtc token failed: %s", proxyId, errApi.Msg)
+				}
+
+				// 4.2 构造 RtcToken
+				// 注意：Host 字段被用作存储连接的 Key，这里设为 ProxyId
+				rtcToken := coreClass.RtcToken{
+					UserId:   0,
+					DeviceId: 0, // 连接是中间件级别的，不绑定特定设备
+					HostUrl:  rtcRes.Url,
+					Token:    rtcRes.Token,
+					GuestUrl: rtcRes.Url,
+					Host:     fmt.Sprintf("%d", proxyId),
+				}
+
+				// 4.3 连接中间件
+				core.MiddleRtcConnect(rtcToken)
+
+				// 4.4 等待连接建立
+				connected = false
+				for i := 0; i < 20; i++ {
+					time.Sleep(200 * time.Millisecond)
+					if _, ok := core.MidGetConn(proxyId); ok {
+						connected = true
+						logs.Info("[device_control] Proxy %d connected successfully", proxyId)
+						logger.LogInfo("[Unified] Proxy %d connected successfully", proxyId)
+						break
+					}
+				}
+				if !connected {
+					// 连接超时，如果还有重试机会，继续
+					if retry < maxRetries {
+						logs.Warn("[device_control] Timeout waiting for proxy %d connection. Retrying...", proxyId)
+						logger.LogError("[Unified] Timeout waiting for proxy %d connection. Retrying...", proxyId)
+						continue
+					}
+					return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
+				}
+			} else {
+				logs.Info("[device_control] Proxy %d already connected, reusing connection", proxyId)
+				logger.LogInfo("[Unified] Proxy %d already connected, reusing connection", proxyId)
 			}
 
-			// 4.3 连接中间件
-			core.MiddleRtcConnect(rtcToken)
+			// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
+			res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
+			if err != nil {
+				logs.Error("[device_control] Send command to proxy %d failed: %v", proxyId, err)
+				logger.LogError("[Unified] Send command failed: proxy=%d err=%v", proxyId, err)
 
-			// 4.4 等待连接建立
-			connected = false
-			for i := 0; i < 20; i++ {
-				time.Sleep(200 * time.Millisecond)
-				if _, ok := core.MidGetConn(proxyId); ok {
-					connected = true
-					logs.Info("Proxy %d connected successfully", proxyId)
-					break
+				// 仅在超时场景自动断开并重试
+				if isSync && isTimeoutErr(err) && retry < maxRetries {
+					logs.Info("[device_control] Timeout on proxy %d, reconnecting and retrying...", proxyId)
+					logger.LogInfo("[Unified] Timeout on proxy %d, reconnecting and retrying", proxyId)
+					CloseMiddleConnection(proxyId)
+					continue
+				}
+
+				// 非超时错误：关闭连接以便下次重连
+				logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
+				logger.LogInfo("[Unified] Force closing proxy %d due to send failure", proxyId)
+				CloseMiddleConnection(proxyId)
+
+				// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
+				if isSync {
+					return nil, err
 				}
 			}
-			if !connected {
-				return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
-			}
-		} else {
-			logs.Info("Proxy %d already connected, reusing connection", proxyId)
-		}
 
-		// 5. 构造并发送命令
-		cmd := coreClass.GenericCommand{
-			F:    f,
-			Data: data,
-			Req:  req,
-		}
-
-		// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
-		res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
-		if err != nil {
-			logs.Error("Send command to proxy %d failed: %v", proxyId, err)
-			// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
-			if isSync {
-				return nil, err
+			if isSync && res != nil {
+				if resSlice, ok := res.([]interface{}); ok {
+					allResults = append(allResults, resSlice...)
+				} else {
+					allResults = append(allResults, res)
+				}
 			}
-		}
-
-		if isSync && res != nil {
-			if resSlice, ok := res.([]interface{}); ok {
-				allResults = append(allResults, resSlice...)
-			} else {
-				allResults = append(allResults, res)
-			}
+			
+			// 成功执行或不需要重试，退出重试循环
+			break
 		}
 	}
 
@@ -122,6 +208,18 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 	}
 
 	return nil, nil
+}
+
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout")
+}
+
+func isTimeoutMsg(msg string) bool {
+	return strings.Contains(msg, "超时") || strings.Contains(strings.ToLower(msg), "timeout")
 }
 
 // CloseMiddleConnection explicitly closes the middleware connection for a device
