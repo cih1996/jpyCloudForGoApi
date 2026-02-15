@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ghp3000/netclient/bufferPool"
-	"github.com/ghp3000/netclient/netclient"
+	"github.com/ghp3000/netclient/NetClient"
 )
 
 type Opt struct {
@@ -15,10 +15,10 @@ type Opt struct {
 	Reconnect    uint32
 	Delay        time.Duration
 	Dialer       func() (net.Conn, error)
-	OnConnect    func(c netclient.NetClient) //连接成功后将启动独立goroutine
-	OnDisconnect func(c netclient.NetClient)
+	OnConnect    func(c NetClient.NetClient) //连接成功后将启动独立goroutine
+	OnDisconnect func(c NetClient.NetClient)
 	OnErr        func(err error)
-	OnConnData   netclient.Callback
+	OnConnData   NetClient.Callback
 }
 type Client struct {
 	conn    *Conn
@@ -76,10 +76,10 @@ func (c *Client) Connect() {
 		time.Sleep(c.Delay)
 	}
 }
-func (c *Client) SetOnConnect(f netclient.ConnectEvent) {
+func (c *Client) SetOnConnect(f NetClient.ConnectEvent) {
 	c.OnConnect = f
 }
-func (c *Client) GetConn() (netclient.NetClient, error) {
+func (c *Client) GetConn() (NetClient.NetClient, error) {
 	if !c.online.Load() {
 		return nil, fmt.Errorf("client not online")
 	}

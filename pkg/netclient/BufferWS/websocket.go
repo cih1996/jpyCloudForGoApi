@@ -13,7 +13,7 @@ import (
 
 	"github.com/ghp3000/logs"
 	"github.com/ghp3000/netclient/bufferPool"
-	"github.com/ghp3000/netclient/netclient"
+	"github.com/ghp3000/netclient/NetClient"
 	"github.com/ghp3000/utils"
 	"github.com/gorilla/websocket"
 )
@@ -23,7 +23,7 @@ const name = "websocket"
 type Conn struct {
 	conn      *websocket.Conn  //客户机连接上来的连接
 	buf       *bufferPool.Pool // 收发数据的读写器
-	onData    netclient.Callback
+	onData    NetClient.Callback
 	extra     interface{} //附加数据，可以用来做标志，比如这条连接的用户Id，等
 	sessionId int64
 	lock      sync.Mutex
@@ -35,7 +35,7 @@ type Conn struct {
 }
 
 // NewConn 实例化一个连接，注意：并未启动接收数据的线程。需要自己手动  go OnData
-func NewConn(conn1 *websocket.Conn, pool *bufferPool.Pool, onData netclient.Callback) *Conn {
+func NewConn(conn1 *websocket.Conn, pool *bufferPool.Pool, onData NetClient.Callback) *Conn {
 	if pool == nil {
 		pool = bufferPool.Buffer
 	}
@@ -47,7 +47,7 @@ func NewConn(conn1 *websocket.Conn, pool *bufferPool.Pool, onData netclient.Call
 	}
 	return &c
 }
-func NewConnWithCache(conn1 *websocket.Conn, pool *bufferPool.Pool, onData netclient.Callback) *Conn {
+func NewConnWithCache(conn1 *websocket.Conn, pool *bufferPool.Pool, onData NetClient.Callback) *Conn {
 	c := NewConn(conn1, pool, onData)
 	c.isCached = true
 	c.ch = make(chan *bufferPool.Packet, 100)
@@ -66,11 +66,11 @@ func (c *Conn) SessionId() int64 {
 	return c.sessionId
 }
 
-func (c *Conn) SetOnConnect(f netclient.ConnectEvent) {
+func (c *Conn) SetOnConnect(f NetClient.ConnectEvent) {
 
 }
 
-func (c *Conn) OnHandshake(f netclient.Callback) error {
+func (c *Conn) OnHandshake(f NetClient.Callback) error {
 	defer func() {
 		if c.conn != nil {
 			_ = c.conn.SetReadDeadline(time.Time{})
@@ -85,7 +85,7 @@ func (c *Conn) OnHandshake(f netclient.Callback) error {
 	}
 	return c._onData(f)
 }
-func (c *Conn) SetOnDataCallback(f netclient.Callback) {
+func (c *Conn) SetOnDataCallback(f NetClient.Callback) {
 	c.onData = f
 }
 func (c *Conn) OnData() {
@@ -98,7 +98,7 @@ func (c *Conn) OnData() {
 	}()
 	_ = c._onData(c.onData)
 }
-func (c *Conn) _onData(f netclient.Callback) error {
+func (c *Conn) _onData(f NetClient.Callback) error {
 	if f == nil {
 		return errors.New("callback can not be nil")
 	}
@@ -131,13 +131,13 @@ func (c *Conn) Name() string {
 func (c *Conn) SendPing() error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	err := c.conn.WriteMessage(websocket.BinaryMessage, netclient.Ping[4:])
+	err := c.conn.WriteMessage(websocket.BinaryMessage, NetClient.Ping[4:])
 	return err
 }
 func (c *Conn) SendPong() error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	err := c.conn.WriteMessage(websocket.BinaryMessage, netclient.Pong[4:])
+	err := c.conn.WriteMessage(websocket.BinaryMessage, NetClient.Pong[4:])
 	return err
 }
 func (c *Conn) SendPacket(p *bufferPool.Packet) (err error) {
@@ -194,7 +194,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	defer w.Close()
 	return w.Write(p)
 }
-func (c *Conn) GetConnWithDeadline() (netclient.ConnWithDeadline, error) {
+func (c *Conn) GetConnWithDeadline() (NetClient.ConnWithDeadline, error) {
 	if c == nil || c.conn == nil || c.buf == nil {
 		return nil, errors.New("connect is fail")
 	}

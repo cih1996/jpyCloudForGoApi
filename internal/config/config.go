@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"sync"
 
@@ -84,4 +85,25 @@ func SetWsUrlMemory(url string) {
 	lock.Lock()
 	defer lock.Unlock()
 	cfg.WsUrl = url
+}
+
+// GetTableIP 从 WsUrl 中提取集控平台主机地址
+// 例如 "wss://minio.accjs.cn/ws" → "minio.accjs.cn"
+// JpyApiAgent 的 NewCore 需要纯主机地址，内部会自行拼接 wss:// 和 /ws
+func GetTableIP() string {
+	lock.RLock()
+	defer lock.RUnlock()
+	wsUrl := cfg.WsUrl
+	if wsUrl == "" {
+		return ""
+	}
+	u, err := url.Parse(wsUrl)
+	if err != nil {
+		// 解析失败，尝试直接返回（可能本身就是纯主机地址）
+		return wsUrl
+	}
+	if u.Host != "" {
+		return u.Host
+	}
+	return wsUrl
 }

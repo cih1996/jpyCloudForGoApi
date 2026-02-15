@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/ghp3000/netclient/bufferPool"
-	"github.com/ghp3000/netclient/netclient"
+	"github.com/ghp3000/netclient/NetClient"
 	"github.com/ghp3000/netclient/webRTC"
 	"github.com/pion/webrtc/v4"
 	"port-mapping-demo/pkg/logger"
@@ -16,7 +16,7 @@ const name = "webrtc"
 
 type RtcClient struct {
 	buf       *bufferPool.Pool // 收发数据的读写器
-	callback  netclient.Callback
+	callback  NetClient.Callback
 	Client    *webRTC.Client
 	channel   *webRTC.DataChannel
 	online    bool
@@ -24,7 +24,7 @@ type RtcClient struct {
 	sessionId int64
 }
 
-func New(id interface{}, urlString string, token string, isGuest bool, pool *bufferPool.Pool, onOpen, onClose netclient.ConnectEvent, callback netclient.Callback) (*RtcClient, error) {
+func New(id interface{}, urlString string, token string, isGuest bool, pool *bufferPool.Pool, onOpen, onClose NetClient.ConnectEvent, callback NetClient.Callback) (*RtcClient, error) {
 	if pool == nil {
 		pool = bufferPool.Buffer
 	}
@@ -82,34 +82,34 @@ func (s *RtcClient) Extra() interface{} {
 func (s *RtcClient) SessionId() int64 {
 	return s.sessionId
 }
-func (s *RtcClient) GetConnWithDeadline() (netclient.ConnWithDeadline, error) {
+func (s *RtcClient) GetConnWithDeadline() (NetClient.ConnWithDeadline, error) {
 	if s.channel == nil {
 		return nil, errors.New("channel is nil")
 	}
 	return nil, nil
 }
 
-func (s *RtcClient) SetOnConnect(f netclient.ConnectEvent) {
+func (s *RtcClient) SetOnConnect(f NetClient.ConnectEvent) {
 
 }
 
 // OnHandshake 无用
-func (s *RtcClient) OnHandshake(f netclient.Callback) error {
+func (s *RtcClient) OnHandshake(f NetClient.Callback) error {
 	return nil
 }
-func (s *RtcClient) SetOnDataCallback(f netclient.Callback) {
+func (s *RtcClient) SetOnDataCallback(f NetClient.Callback) {
 	s.callback = f
 }
 func (s *RtcClient) SendPing() error {
 	if s.channel != nil {
-		return s.channel.SendRaw(netclient.Ping)
+		return s.channel.SendRaw(NetClient.Ping)
 	}
 	return nil
 }
 
 func (s *RtcClient) SendPong() error {
 	if s.channel != nil {
-		return s.channel.SendRaw(netclient.Pong)
+		return s.channel.SendRaw(NetClient.Pong)
 	}
 	return nil
 }
