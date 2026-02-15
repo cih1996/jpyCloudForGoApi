@@ -2,19 +2,16 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"port-mapping-demo/pkg/logger"
+	"port-mapping-demo/third_party/JpyApiAgent/table/coreClass/publicStruct"
 	"strings"
 	"time"
 
-	"adminApi/rtcCtl"
 	"adminApi/userDeviceCtl"
-	"port-mapping-demo/coreClass"
-	"port-mapping-demo/internal/manager"
-	"port-mapping-demo/pkg/logger"
 
 	"github.com/ghp3000/logs"
-	"github.com/ghp3000/public"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 // DeviceCommandInfo 包含执行命令所需的设备信息
@@ -24,179 +21,91 @@ type DeviceCommandInfo struct {
 	TbYunJiUserDeviceId uint64 `json:"tbYunJiUserDeviceId"`
 }
 
-// SendGenericCommandToDevice 发送通用命令
-// 支持自定义 F 码、Data、Req 和 同步/异步
+// SendGenericCommandToDevice 通过 JpyApiAgent 中间件发送命令到设备
+// 根据 F 码分发到对应的 JpyApiAgent sync 方法
+// 保持原有函数签名不变，确保 unified_handler.go 无需修改调用方式
 func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uint16, data interface{}, req bool, isSync bool, timeout time.Duration) (interface{}, error) {
 	// 1. 确保已登录
 	if err := EnsureLogin(key); err != nil {
-		return nil, fmt.Errorf("ensure login failed: %v", err)
+		return nil, fmt.Errorf("登录失败: %v", err)
 	}
 
-	// 2. 获取 Core 实例
-	core := manager.GetInstance().Core
-
-	// 3. 按中间件分组设备
-	proxyGroups := make(map[uint64][]uint64)
-	for _, d := range deviceIds {
-		// Log extracted MiddleId and Seat for debugging
-		logs.Info("[device_control] Processing deviceId=%d, MiddleId=%d, Seat=%d",
-			d.DeviceId,
-			coreClass.GetMiddleIdFromDeviceId(d.DeviceId),
-			coreClass.GetSeatFromDeviceId(d.DeviceId))
-
-		// 如果 f=6，强制将 deviceId 设置为 0，因为这是直接发给中间件的指令
-		targetDeviceId := d.DeviceId
-		if f == 6 {
-			targetDeviceId = 0
-		}
-
-		if targetDeviceId == 0 {
-			proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], 0)
-		} else {
-			proxyGroups[d.TbProxyId] = append(proxyGroups[d.TbProxyId], targetDeviceId)
-		}
+	core := GetJpyCore()
+	if core == nil {
+		return nil, fmt.Errorf("JpyApiAgent Core 未初始化")
 	}
 
+	// 2. 遍历设备，通过 JpyApiAgent 中间件 sync 方法发送命令
 	var allResults []interface{}
 
-	// 4. 遍历每个中间件，确保连接并发送命令
-	for proxyId, targetDevIds := range proxyGroups {
-		maxRetries := 1 // 仅在超时场景自动重试
-		for retry := 0; retry <= maxRetries; retry++ {
-			// 5. 构造命令（放在前面，避免跳转问题）
-			cmd := coreClass.GenericCommand{
-				F:    f,
-				Data: data,
-				Req:  req,
+	for _, d := range deviceIds {
+		middlewareId := publicStruct.GetMiddleIdFromDeviceId(d.DeviceId)
+		logger.LogInfo("[device_control] 设备=%d, 中间件=%d, F=%d", d.DeviceId, middlewareId, f)
+
+		// 获取中间件对象（JpyApiAgent 在 CenterGetDeviceList 时已自动创建 RTC 连接）
+		middleAgent, ok := core.GetMiddleAgent(middlewareId)
+		if !ok || middleAgent == nil {
+			// 中间件未连接，尝试重新获取设备列表以触发连接
+			logs.Info("[device_control] 中间件 %d 未连接，尝试重新获取设备列表...", middlewareId)
+			if _, err := core.CenterGetDeviceList(); err != nil {
+				return nil, fmt.Errorf("中间件 %d 连接失败: %v", middlewareId, err)
 			}
+			middleAgent, ok = core.GetMiddleAgent(middlewareId)
+			if !ok || middleAgent == nil {
+				return nil, fmt.Errorf("中间件 %d 不存在或未连接", middlewareId)
+			}
+		}
 
-			// 使用 ProxyId 作为连接 Key
-			_, connected := core.MidGetConn(proxyId)
-			if !connected {
-				if _, loaded := core.ReconnectInProgress.LoadOrStore(proxyId, struct{}{}); loaded {
-					// Another goroutine is reconnecting this proxy; wait briefly for it to finish.
-					for i := 0; i < 20; i++ {
-						time.Sleep(200 * time.Millisecond)
-						if _, ok := core.MidGetConn(proxyId); ok {
-							connected = true
-							break
-						}
-					}
-					if connected {
-						logs.Info("[device_control] Proxy %d connected by another goroutine, reusing connection", proxyId)
-						logger.LogInfo("[Unified] Proxy %d connected by another goroutine, reusing connection", proxyId)
-					}
-					// Still not connected, continue with our own attempt.
-				}
-				defer core.ReconnectInProgress.Delete(proxyId)
-				logs.Info("[device_control] Proxy %d not connected, initiating connection... (Attempt %d/%d)", proxyId, retry+1, maxRetries+1)
-				logger.LogInfo("[Unified] Proxy %d not connected, initiating connection (attempt %d/%d)", proxyId, retry+1, maxRetries+1)
+		// 3. 根据 F 码分发到对应的 JpyApiAgent sync 方法
+		var result string
+		var err error
 
-				if globalApi == nil {
-					if err := forceRelogin(key); err != nil {
-						return nil, err
-					}
-				}
-				if globalApi == nil {
-					return nil, fmt.Errorf("globalApi is nil")
-				}
+		switch f {
+		case 4: // 获取设备详细信息
+			result, err = middleAgent.SyncGetDeviceDetails(d.DeviceId)
+		case 6: // 获取中间件下所有设备状态
+			result, err = middleAgent.SyncGetAllList()
+		case 289: // 执行 Shell 命令
+			shell := extractStringField(data, "shell")
+			result, err = middleAgent.SyncShellCommand(d.DeviceId, shell)
+		case 290: // 获取应用列表
+			result, err = middleAgent.SyncGetAppList(d.DeviceId)
+		case 291: // 启动应用
+			pkgName := extractStringField(data, "packageName")
+			result, err = middleAgent.SyncRunApp(d.DeviceId, pkgName)
+		case 293: // 下载并安装应用
+			install := extractDownloadInstall(data)
+			result, err = middleAgent.SyncDownloadAndInstall(d.DeviceId, install)
+		case 294: // 查询下载进度
+			id := extractUint32Field(data, "id")
+			result, err = middleAgent.SyncCheckProgress(d.DeviceId, id)
+		case 516: // 设置 Root 权限
+			pkg := extractStringField(data, "pkg")
+			result, err = middleAgent.SyncRootApp(d.DeviceId, pkg)
+		default:
+			// 未知 F 码，尝试通用发送
+			result, err = middleAgent.SyncSendToDevice(f, data, d.DeviceId, fmt.Sprintf("[通用命令F=%d]", f))
+		}
 
-				// 4.1 获取中间件 RTC Token
-				pId := int64(proxyId)
-				rtcRes, errApi := globalApi.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
-					TbProxyId: &pId,
-				})
-				if errApi != nil {
-					if isTimeoutMsg(errApi.Msg) {
-						logger.LogError("[Unified] Get rtc token timeout for proxy %d: %s", proxyId, errApi.Msg)
-						if err := forceRelogin(key); err != nil {
-							logger.LogError("[Unified] Relogin failed after timeout: %v", err)
-						}
-					}
-					// 如果获取token失败，且还有重试机会，则继续重试
-					if retry < maxRetries {
-						logs.Warn("[device_control] Get rtc token failed for proxy %d: %s. Retrying...", proxyId, errApi.Msg)
-						logger.LogError("[Unified] Get rtc token failed for proxy %d: %s", proxyId, errApi.Msg)
-						time.Sleep(1 * time.Second)
-						continue
-					}
-					return nil, fmt.Errorf("proxy %d get rtc token failed: %s", proxyId, errApi.Msg)
-				}
+		if err != nil {
+			logs.Error("[device_control] 命令执行失败: 设备=%d, F=%d, err=%v", d.DeviceId, f, err)
+			logger.LogError("[device_control] 命令执行失败: 设备=%d, F=%d, err=%v", d.DeviceId, f, err)
+			if isSync {
+				return nil, err
+			}
+			continue
+		}
 
-				// 4.2 构造 RtcToken
-				// 注意：Host 字段被用作存储连接的 Key，这里设为 ProxyId
-				rtcToken := coreClass.RtcToken{
-					UserId:   0,
-					DeviceId: 0, // 连接是中间件级别的，不绑定特定设备
-					HostUrl:  rtcRes.Url,
-					Token:    rtcRes.Token,
-					GuestUrl: rtcRes.Url,
-					Host:     fmt.Sprintf("%d", proxyId),
-				}
+		logger.LogInfo("[device_control] 命令执行成功: 设备=%d, F=%d", d.DeviceId, f)
 
-				// 4.3 连接中间件
-				core.MiddleRtcConnect(rtcToken)
-
-				// 4.4 等待连接建立
-				connected = false
-				for i := 0; i < 20; i++ {
-					time.Sleep(200 * time.Millisecond)
-					if _, ok := core.MidGetConn(proxyId); ok {
-						connected = true
-						logs.Info("[device_control] Proxy %d connected successfully", proxyId)
-						logger.LogInfo("[Unified] Proxy %d connected successfully", proxyId)
-						break
-					}
-				}
-				if !connected {
-					// 连接超时，如果还有重试机会，继续
-					if retry < maxRetries {
-						logs.Warn("[device_control] Timeout waiting for proxy %d connection. Retrying...", proxyId)
-						logger.LogError("[Unified] Timeout waiting for proxy %d connection. Retrying...", proxyId)
-						continue
-					}
-					return nil, fmt.Errorf("timeout waiting for proxy %d connection", proxyId)
-				}
+		if isSync {
+			// 将 JSON 字符串解析为 interface{} 避免双重编码
+			var parsed interface{}
+			if jsonErr := json.Unmarshal([]byte(result), &parsed); jsonErr != nil {
+				allResults = append(allResults, result)
 			} else {
-				logs.Info("[device_control] Proxy %d already connected, reusing connection", proxyId)
-				logger.LogInfo("[Unified] Proxy %d already connected, reusing connection", proxyId)
+				allResults = append(allResults, parsed)
 			}
-
-			// 调用更新后的 MiddleRtcSendGenericCommand，传入 proxyId
-			res, err := core.MiddleRtcSendGenericCommand(proxyId, targetDevIds, cmd, isSync, timeout)
-			if err != nil {
-				logs.Error("[device_control] Send command to proxy %d failed: %v", proxyId, err)
-				logger.LogError("[Unified] Send command failed: proxy=%d err=%v", proxyId, err)
-
-				// 仅在超时场景自动断开并重试
-				if isSync && isTimeoutErr(err) && retry < maxRetries {
-					logs.Info("[device_control] Timeout on proxy %d, reconnecting and retrying...", proxyId)
-					logger.LogInfo("[Unified] Timeout on proxy %d, reconnecting and retrying", proxyId)
-					CloseMiddleConnection(proxyId)
-					continue
-				}
-
-				// 非超时错误：关闭连接以便下次重连
-				logs.Info("[device_control] Force closing connection for proxy %d due to send failure", proxyId)
-				logger.LogInfo("[Unified] Force closing proxy %d due to send failure", proxyId)
-				CloseMiddleConnection(proxyId)
-
-				// 如果是同步模式且发生错误，目前策略是返回错误 (或者可以收集错误)
-				if isSync {
-					return nil, err
-				}
-			}
-
-			if isSync && res != nil {
-				if resSlice, ok := res.([]interface{}); ok {
-					allResults = append(allResults, resSlice...)
-				} else {
-					allResults = append(allResults, res)
-				}
-			}
-			
-			// 成功执行或不需要重试，退出重试循环
-			break
 		}
 	}
 
@@ -210,33 +119,72 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 	return nil, nil
 }
 
+// ==================== 辅助函数：从 data 中提取字段 ====================
+
+// extractStringField 从 data 中提取字符串字段
+func extractStringField(data interface{}, field string) string {
+	if m, ok := data.(map[string]interface{}); ok {
+		if v, ok := m[field].(string); ok {
+			return v
+		}
+	}
+	// 尝试 JSON 序列化再解析
+	b, err := json.Marshal(data)
+	if err != nil {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return ""
+	}
+	if v, ok := m[field].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// extractUint32Field 从 data 中提取 uint32 字段
+func extractUint32Field(data interface{}, field string) uint32 {
+	if m, ok := data.(map[string]interface{}); ok {
+		if v, ok := m[field].(float64); ok {
+			return uint32(v)
+		}
+		if v, ok := m[field].(string); ok {
+			// 尝试解析字符串
+			var n uint32
+			fmt.Sscanf(v, "%d", &n)
+			return n
+		}
+	}
+	return 0
+}
+
+// extractDownloadInstall 从 data 中提取下载安装参数
+func extractDownloadInstall(data interface{}) *publicStruct.DownloadAndInstall {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return &publicStruct.DownloadAndInstall{}
+	}
+	var install publicStruct.DownloadAndInstall
+	if err := json.Unmarshal(b, &install); err != nil {
+		return &publicStruct.DownloadAndInstall{}
+	}
+	return &install
+}
+
 func isTimeoutErr(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout")
+	return strings.Contains(msg, "timeout") || strings.Contains(msg, "超时")
 }
 
-func isTimeoutMsg(msg string) bool {
-	return strings.Contains(msg, "超时") || strings.Contains(strings.ToLower(msg), "timeout")
-}
-
-// CloseMiddleConnection explicitly closes the middleware connection for a device
-func CloseMiddleConnection(deviceId uint64) {
-	core := manager.GetInstance().Core
-	if midRtc, ok := core.MidGetConn(deviceId); ok {
-		if midRtc.Conn != nil {
-			logs.Info("Closing connection for device %d", deviceId)
-			midRtc.Conn.Close()
-		}
-		core.MidDelConn(deviceId)
-	}
-}
+// ==================== 中间件命令 HTTP 接口 ====================
 
 // MiddleCommandRequest 请求结构
 type MiddleCommandRequest struct {
-	Key      string `json:"key"` // 如果不传则尝试使用 currentKey
+	Key      string `json:"key"`
 	DeviceId uint64 `json:"deviceId"`
 	Data     struct {
 		F    uint16      `json:"f"`
@@ -248,7 +196,6 @@ type MiddleCommandRequest struct {
 
 // MiddleExecuteCommand 执行中间件命令
 func MiddleExecuteCommand(ctx context.Context, req *MiddleCommandRequest) (*interface{}, error) {
-	// Determine key
 	key := req.Key
 	if key == "" {
 		loginLock.Lock()
@@ -259,85 +206,46 @@ func MiddleExecuteCommand(ctx context.Context, req *MiddleCommandRequest) (*inte
 		return nil, fmt.Errorf("authentication key is required")
 	}
 
-	// 1. Find Device Info (TbProxyId)
+	// 查找设备信息
 	deviceInfo, err := findDeviceInfo(key, req.DeviceId)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Send Command
-	// isSync=true for API/WS to return result in response
+	// 发送命令
 	res, err := SendGenericCommandToDevice(key, []DeviceCommandInfo{*deviceInfo}, req.Data.F, req.Data.Data, req.Data.Req, true, 20*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	// Process response to decode Msgpack data for JSON output
-	processedRes := processResponse(res)
-	return &processedRes, nil
+	// JpyApiAgent 返回的已经是解析好的 JSON，直接返回
+	return &res, nil
 }
 
-// processResponse processes the result to ensure Data is correctly decoded for JSON
+// processResponse 处理响应数据
+// JpyApiAgent 的 sync 方法返回的是 JSON 字符串，已在 SendGenericCommandToDevice 中解析
+// 此函数保留用于兼容 unified_handler.go 中的调用
 func processResponse(res interface{}) interface{} {
-	if res == nil {
-		return nil
-	}
-
-	// If it's a slice, process each element
-	if resSlice, ok := res.([]interface{}); ok {
-		newSlice := make([]interface{}, len(resSlice))
-		for i, v := range resSlice {
-			newSlice[i] = processResponse(v)
-		}
-		return newSlice
-	}
-
-	// If it's a *public.Message, unmarshal DataMsgpack
-	if msg, ok := res.(*public.Message); ok {
-		// Create a map to hold the full JSON response
-		resMap := make(map[string]interface{})
-
-		resMap["f"] = msg.F
-		resMap["req"] = msg.Req
-		resMap["seq"] = msg.Seq
-		if msg.Code != 0 {
-			resMap["code"] = msg.Code
-		}
-		if msg.Msg != "" {
-			resMap["msg"] = msg.Msg
-		}
-		if msg.T != 0 {
-			resMap["t"] = msg.T
-		}
-
-		// Decode DataMsgpack if present
-		if len(msg.DataMsgpack) > 0 {
-			var data interface{}
-			if err := msgpack.Unmarshal(msg.DataMsgpack, &data); err == nil {
-				resMap["data"] = data
-			} else {
-				logs.Warn("Failed to unmarshal DataMsgpack: %v", err)
-			}
-		}
-		return resMap
-	}
-
 	return res
 }
 
-// 寻找对应key的设备ID
+// findDeviceInfo 查找设备信息
 func findDeviceInfo(key string, deviceId uint64) (*DeviceCommandInfo, error) {
 	if err := EnsureLogin(key); err != nil {
 		return nil, err
 	}
 
-	// Fetch all devices (inefficient but works for now)
+	globalApi := GetGlobalApi()
+	if globalApi == nil {
+		return nil, fmt.Errorf("未登录")
+	}
+
 	res, err := globalApi.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
 		PageNum:  1,
-		PageSize: 999999, // Fetch all to find specific one
+		PageSize: 999999,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get device list failed: %v", err)
+		return nil, fmt.Errorf("获取设备列表失败: %v", err)
 	}
 
 	for _, d := range res.Records {
@@ -349,5 +257,24 @@ func findDeviceInfo(key string, deviceId uint64) (*DeviceCommandInfo, error) {
 			}, nil
 		}
 	}
-	return nil, fmt.Errorf("device %d not found", deviceId)
+	return nil, fmt.Errorf("设备 %d 未找到", deviceId)
+}
+
+// findDeviceInfoFromCore 从 JpyApiAgent Core 缓存中查找设备信息（不走 API）
+func findDeviceInfoFromCore(deviceId uint64) (*DeviceCommandInfo, bool) {
+	core := GetJpyCore()
+	if core == nil {
+		return nil, false
+	}
+	devices := core.GetAllDevice()
+	for _, d := range devices {
+		if d.DeviceId == deviceId {
+			return &DeviceCommandInfo{
+				DeviceId:            d.DeviceId,
+				TbProxyId:           uint64(d.DeviceInfo.TbProxyId),
+				TbYunJiUserDeviceId: uint64(d.TBYunJiUserDeviceId),
+			}, true
+		}
+	}
+	return nil, false
 }

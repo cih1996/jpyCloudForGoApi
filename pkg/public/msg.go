@@ -65,3 +65,28 @@ func (m *Message) Bytes() ([]byte, error) {
 	}
 	return nil, fmt.Errorf("unknown data type:%d", m.Type)
 }
+
+// ToJsonString 将消息数据转换为 JSON 字符串
+func (m *Message) ToJsonString() string {
+	if m.F == 12 {
+		var jsonMsg map[uint8]interface{}
+		if err := m.Unmarshal(&jsonMsg); err != nil {
+			return ""
+		}
+		temp := make(map[string]interface{})
+		for k, v := range jsonMsg {
+			temp[fmt.Sprintf("%d", k)] = v
+		}
+		jsonData, _ := json.Marshal(temp)
+		return string(jsonData)
+	}
+	var a interface{}
+	if err := m.Unmarshal(&a); err != nil {
+		return ""
+	}
+	jsonData, err := json.Marshal(a)
+	if err != nil {
+		return ""
+	}
+	return string(jsonData)
+}

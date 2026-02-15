@@ -11,7 +11,7 @@ import (
 
 	"github.com/ghp3000/logs"
 	"github.com/ghp3000/netclient/bufferPool"
-	"github.com/ghp3000/netclient/netclient"
+	"github.com/ghp3000/netclient/NetClient"
 	"github.com/ghp3000/netclient/streamRTC"
 )
 
@@ -19,10 +19,10 @@ type StreamClient struct {
 	buf *bufferPool.Pool // 收发数据的读写器
 
 	channel *streamRTC.DataChannelStream
-	onOpen  netclient.ConnectEvent
-	onClose netclient.ConnectEvent
+	onOpen  NetClient.ConnectEvent
+	onClose NetClient.ConnectEvent
 
-	onData     netclient.Callback
+	onData     NetClient.Callback
 	isCached   bool                    //是否启用带缓存模式
 	cancelFunc context.CancelFunc      //强行停止
 	ch         chan *bufferPool.Packet //发送数据的管道
@@ -35,7 +35,7 @@ type StreamClient struct {
 	lock sync.Mutex //发送锁
 }
 
-func NewStreamClient(id interface{}, urlString string, token string, isGuest bool, pool *bufferPool.Pool, onOpen, onClose netclient.ConnectEvent, callback netclient.Callback) (*StreamClient, error) {
+func NewStreamClient(id interface{}, urlString string, token string, isGuest bool, pool *bufferPool.Pool, onOpen, onClose NetClient.ConnectEvent, callback NetClient.Callback) (*StreamClient, error) {
 	if pool == nil {
 		pool = bufferPool.Buffer
 	}
@@ -58,7 +58,7 @@ func NewStreamClient(id interface{}, urlString string, token string, isGuest boo
 	s.Client = c
 	return s, c.Start()
 }
-func NewStreamClientWithCache(id interface{}, urlString string, token string, isGuest bool, pool *bufferPool.Pool, onOpen, onClose netclient.ConnectEvent, callback netclient.Callback) (*StreamClient, error) {
+func NewStreamClientWithCache(id interface{}, urlString string, token string, isGuest bool, pool *bufferPool.Pool, onOpen, onClose NetClient.ConnectEvent, callback NetClient.Callback) (*StreamClient, error) {
 	if pool == nil {
 		pool = bufferPool.Buffer
 	}
@@ -112,11 +112,11 @@ func (s *StreamClient) Extra() interface{} {
 func (s *StreamClient) SessionId() int64 {
 	return s.sessionId
 }
-func (s *StreamClient) SetOnConnect(f netclient.ConnectEvent) {
+func (s *StreamClient) SetOnConnect(f NetClient.ConnectEvent) {
 	s.onOpen = f
 }
 
-func (s *StreamClient) SetOnDataCallback(f netclient.Callback) {
+func (s *StreamClient) SetOnDataCallback(f NetClient.Callback) {
 	s.onData = f
 }
 func (s *StreamClient) OnData() {
@@ -131,7 +131,7 @@ func (s *StreamClient) OnData() {
 		fmt.Println(err)
 	}
 }
-func (s *StreamClient) OnHandshake(f netclient.Callback) error {
+func (s *StreamClient) OnHandshake(f NetClient.Callback) error {
 	defer func() {
 		_ = s.channel.SetReadDeadline(time.Time{})
 		if err := recover(); err != nil {
@@ -141,7 +141,7 @@ func (s *StreamClient) OnHandshake(f netclient.Callback) error {
 	}()
 	return s._onData(f)
 }
-func (s *StreamClient) _onData(f netclient.Callback) error {
+func (s *StreamClient) _onData(f NetClient.Callback) error {
 	if f == nil {
 		return errors.New("callback can not be nil")
 	}
@@ -166,7 +166,7 @@ func (s *StreamClient) SendPing() error {
 	}
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	_, err := s.channel.Write(netclient.Ping)
+	_, err := s.channel.Write(NetClient.Ping)
 	return err
 }
 func (s *StreamClient) SendPong() error {
@@ -175,11 +175,11 @@ func (s *StreamClient) SendPong() error {
 	}
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	_, err := s.channel.Write(netclient.Pong)
+	_, err := s.channel.Write(NetClient.Pong)
 	return err
 }
 
-func (s *StreamClient) GetConnWithDeadline() (netclient.ConnWithDeadline, error) {
+func (s *StreamClient) GetConnWithDeadline() (NetClient.ConnWithDeadline, error) {
 	if s.channel == nil {
 		return nil, errors.New("channel is nil")
 	}

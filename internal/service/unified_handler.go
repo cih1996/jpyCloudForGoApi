@@ -340,14 +340,15 @@ func previewPayload(b []byte) string {
 	return s
 }
 
+// ensureGlobalApi 确保 JpyApiAgent 已登录且 adminApi 可用
 func ensureGlobalApi() error {
-	if globalApi != nil {
+	if GetGlobalApi() != nil {
 		return nil
 	}
 	if unifiedKey == "" {
 		return fmt.Errorf("not logged in")
 	}
-	// Try to re-login
+	// 尝试自动重新登录
 	logger.LogInfo("[Unified] globalApi is nil, attempting auto-relogin with existing token")
 	return handleLogin(unifiedKey)
 }
@@ -357,8 +358,8 @@ func handleGetDeviceList() (interface{}, error) {
 		return nil, err
 	}
 
-	// Default to page 1, large size to get all
-	ret, err := globalApi.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
+	// 获取全部设备列表（分页设大值）
+	ret, err := GetGlobalApi().UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
 		PageNum:  1,
 		PageSize: 999999,
 	})
@@ -389,7 +390,7 @@ func handleChangePhones(data interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("invalid data format for ChangeOs: %v", err)
 	}
 
-	res, errPkg := globalApi.ChangeOsCtl.ChangeOs(reqs)
+	res, errPkg := GetGlobalApi().ChangeOsCtl.ChangeOs(reqs)
 	if errPkg != nil {
 		return nil, fmt.Errorf("%s", errPkg.Msg)
 	}
@@ -447,7 +448,7 @@ func handleGetTaskStatus(data interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("invalid data format for GetTaskStatus: %v", err)
 	}
 
-	res, errPkg := globalApi.ChangeOsCtl.GetChangeOsStatus(req)
+	res, errPkg := GetGlobalApi().ChangeOsCtl.GetChangeOsStatus(req)
 	if errPkg != nil {
 		return nil, fmt.Errorf("%s", errPkg.Msg)
 	}
@@ -606,7 +607,7 @@ func handleHideApp(data interface{}) (interface{}, error) {
 		IsHide:      &tempReq.IsHide,
 	}
 
-	if errPkg := globalApi.ChangeOsCtl.HideApp(req); errPkg != nil {
+	if errPkg := GetGlobalApi().ChangeOsCtl.HideApp(req); errPkg != nil {
 		return nil, fmt.Errorf("%s", errPkg.Msg)
 	}
 	return "Success", nil
@@ -663,7 +664,7 @@ func handleSetSocket5(data interface{}) (interface{}, error) {
 		NOutSwID:            &tempReq.NOutSwID,
 	}
 
-	if errPkg := globalApi.UserDeviceCtl.SetS5(req); errPkg != nil {
+	if errPkg := GetGlobalApi().UserDeviceCtl.SetS5(req); errPkg != nil {
 		return nil, fmt.Errorf("%s", errPkg.Msg)
 	}
 	return nil, nil
@@ -709,7 +710,7 @@ func handleGetS5outLine(data interface{}) (interface{}, error) {
 		TbYunJiUserDeviceId: &tbId,
 	}
 
-	res, errPkg := globalApi.UserDeviceCtl.GetOutLine(req)
+	res, errPkg := GetGlobalApi().UserDeviceCtl.GetOutLine(req)
 	if errPkg != nil {
 		return nil, fmt.Errorf("%s", errPkg.Msg)
 	}
@@ -729,14 +730,14 @@ func handleGetUserFiles(data interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("invalid data format for GetUserFiles: %v", err)
 	}
 
-	// 1. Get base download URL
-	baseUrl, errPkg := globalApi.TbFileCtl.GetDownloadUrl()
+	// 1. 获取文件下载基础 URL
+	baseUrl, errPkg := GetGlobalApi().TbFileCtl.GetDownloadUrl()
 	if errPkg != nil {
 		return nil, fmt.Errorf("failed to get download url: %s", errPkg.Msg)
 	}
 
-	// 2. Get file list
-	res, errPkg := globalApi.TbFileCtl.List(req)
+	// 2. 获取文件列表
+	res, errPkg := GetGlobalApi().TbFileCtl.List(req)
 	if errPkg != nil {
 		return nil, fmt.Errorf("%s", errPkg.Msg)
 	}
@@ -805,7 +806,7 @@ func handleSetLocation(data interface{}) (interface{}, error) {
 			Longitude:  &lngStr,
 		}
 
-		errPkg := globalApi.ChangeOsCtl.SetLocation(req)
+		errPkg := GetGlobalApi().ChangeOsCtl.SetLocation(req)
 		if errPkg != nil {
 			results = append(results, map[string]interface{}{"deviceId": item.DeviceId, "error": errPkg.Msg})
 		} else {
@@ -1035,23 +1036,37 @@ func processDeviceCommands(data interface{}) (interface{}, error) {
 	return results, nil
 }
 
+// findDeviceInfoWithCache 带缓存的设备信息查找
+// 优先从本地缓存获取，缓存未命中时先尝试 JpyApiAgent Core 缓存，
+// 最后通过集控平台 API 刷新全量设备列表
 func findDeviceInfoWithCache(deviceId uint64) (*DeviceCommandInfo, error) {
+	// 1. 本地 sync.Map 缓存
 	if val, ok := deviceCache.Load(deviceId); ok {
 		return val.(*DeviceCommandInfo), nil
 	}
 
+	// 2. 尝试从 JpyApiAgent Core 内存缓存获取（无需 API 调用）
+	if info, ok := findDeviceInfoFromCore(deviceId); ok {
+		deviceCache.Store(deviceId, info)
+		return info, nil
+	}
+
+	// 3. 缓存未命中，通过集控平台 API 刷新
 	if err := ensureGlobalApi(); err != nil {
 		return nil, err
 	}
 
-	// Refresh cache by fetching all devices
-	// Note: This might be heavy if called frequently without cache hits, but cache should help.
-	res, err := globalApi.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
+	api := GetGlobalApi()
+	if api == nil {
+		return nil, fmt.Errorf("globalApi 不可用")
+	}
+
+	res, err := api.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
 		PageNum:  1,
 		PageSize: 999999,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get device list failed: %v", err)
+		return nil, fmt.Errorf("获取设备列表失败: %v", err)
 	}
 
 	var found *DeviceCommandInfo
@@ -1072,5 +1087,5 @@ func findDeviceInfoWithCache(deviceId uint64) (*DeviceCommandInfo, error) {
 		return found, nil
 	}
 
-	return nil, fmt.Errorf("device %d not found", deviceId)
+	return nil, fmt.Errorf("设备 %d 未找到", deviceId)
 }

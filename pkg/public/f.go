@@ -41,6 +41,11 @@ const (
 	FuncGetSettingByHid        = 103 //armLinux在hid硬件标志存在的情况下,发送sn,中间件返回签名后的Setting
 	FuncGetSettingByPreSetting = 104 //armLinux发送PreSetting,中间件返回签名后的Setting
 	FuncDeviceVersion          = 105 //手机内程序版本: {"name":"main","id":1,"version":"","url":""}
+	FuncModeSwitch             = 106 //切换设备模式 otg=0 usb=1
+	FuncDevicePowerControl     = 107 //控制设备电源
+	FuncEnterFlashingMode      = 108 //进入刷机模式 1=模式1[开关+音量减5秒];2=模式2[开关+音量减9秒];3=模式3[开关+音量加5秒]
+	FuncSetDeviceToFindMode    = 109 //设置设备查找模式(让机箱的面板对应的板卡指示灯闪烁) 0=关闭,1=开启
+	FuncGetMiddlewareWorkMode  = 110 //获取中间件工作模式
 
 	FuncScreenChange  = 250 //设备屏幕旋转广播
 	FuncStartVideo    = 251 //开启设备的视频编码,群控连接禁止调用
@@ -54,15 +59,19 @@ const (
 	FuncCMDWithResult = 289 //{shell: "ls -l /data/local/tmp"}
 	FuncGetAppList    = 290 //获取设备app列表
 	FuncRunApp        = 291 // 运行app
-	FuncWakeUPAways   = 298 //屏幕常亮
+	FuncScreenOff     = 297 //关闭屏幕
+	FuncScreenOn      = 298 //屏幕常亮
 	FuncImg           = 299 //{x:0,y:0,width: w, height: h, qua: 90,scale:1080}
 
-	FuncAuth         = 255 //设备鉴权
-	FuncFileDownload = 293
-	FuncChangeInput  = 518 //切换输入源
-	FuncInputText    = 769 //输入文本
-	FuncGetText      = 770 //获取远程手机剪辑版内容
-	FuncChangSwitch  = 515
-	FuncSetRootApp   = 516 // 设置root app
-	FuncUnSetRootApp = 517 // 取消设置root app
+	FuncAuth                      = 255 //设备鉴权
+	FuncFileDownload              = 293
+	FuncDownloadAndInstallMessage = 294 //获取文件下载信息
+	FuncChangeInput               = 518 //切换输入源
+	FuncInputText                 = 769 //输入文本
+	FuncGetText                   = 770 //获取远程手机剪辑版内容
+	FuncChangSwitch               = 515
+	FuncSetRootApp                = 516 // 设置root app
+	FuncCancelSetRootApp          = 517 // 取消设置root app
+	FuncEnterText                 = 769 //输入文本
+	FuncGetClipboard              = 770 //获取剪贴板内容
 )
