@@ -1,13 +1,14 @@
 # Go 端口转发服务 (Go Port Transfer Service)
 
-本项目是一个**高性能端口转发与设备管理服务**，支持统一的 HTTP/WebSocket API 接口。
+本项目是一个**高性能端口转发与设备管理服务**，基于 [JpyApiAgent](https://github.com/cih1996/JpyApiAgent) 通讯框架，支持统一的 HTTP/WebSocket API 接口。
 
 ## 🚀 概览
 
-该服务提供了一个模块化的后端，用于管理设备连接和端口映射。它采用**统一 API 架构**，所有业务端点均可通过 HTTP (POST) 和 WebSocket 访问，并确保跨协议的数据结构一致性。
+该服务提供了一个模块化的后端，用于管理设备连接和端口映射。内部通讯层基于 **JpyApiAgent** 实现，涵盖集控平台登录、WebRTC 打洞、中间件通信及端口映射等核心能力。对外采用**统一 API 架构**，所有业务端点均可通过 HTTP (POST) 和 WebSocket 访问，并确保跨协议的数据结构一致性。
 
 ## ✨ 核心特性
 
+*   **JpyApiAgent 通讯框架**：集控平台登录、设备 RTC 打洞、中间件同步指令等底层通讯全部由 JpyApiAgent 处理。
 *   **统一 API 架构**：所有业务逻辑通过相同的 Request/Response 结构暴露给 HTTP 和 WebSocket。
 *   **交互式文档**：提供自动生成的交互式 API 文档，访问 `/doc` 即可查看。
 *   **双协议支持**：
@@ -113,14 +114,20 @@ WebSocket 接口使用简单的信封协议 (Envelope Protocol) 将请求路由�
 ├── main.go                 # 应用程序入口与路由注册
 ├── run.sh                  # 启动脚本
 ├── internal/
+│   ├── config/             # 运行时配置管理
 │   ├── manager/            # 状态管理 (单例)
 │   ├── model/              # Request/Response 结构体定义
-│   └── service/            # 业务逻辑实现
+│   └── service/            # 业务逻辑实现（登录、设备控制、统一处理）
+├── third_party/
+│   └── JpyApiAgent/        # JpyApiAgent 通讯框架（集控平台、RTC 打洞、中间件通信）
 └── pkg/
     ├── framework/          # Web/WS 框架与自动文档引擎
+    ├── netclient/          # 网络客户端抽象（RTC/TCP/WS）
+    ├── public/             # 公共常量与消息定义
     └── portmap/            # 核心端口转发逻辑
 ```
 
 ## 🔗 关联项目
 
 *   **前端仓库地址**：[https://github.com/cih1996/jp-cloud-script/](https://github.com/cih1996/jp-cloud-script/)
+*   **通讯框架 JpyApiAgent**：[https://github.com/cih1996/JpyApiAgent](https://github.com/cih1996/JpyApiAgent)
