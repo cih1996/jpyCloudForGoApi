@@ -227,6 +227,7 @@ func sendWSResponse(ws *websocket.Conn, mu *sync.Mutex, res *UnifiedResponse) {
 type UnifiedRequest struct {
 	Type   string      `json:"type"`
 	Token  string      `json:"token,omitempty"`
+	Host   string      `json:"host,omitempty"` // 云服务器地址，如 minio.accjs.cn
 	Seq    int         `json:"seq"`
 	Data   interface{} `json:"data,omitempty"`
 	FuncId int         `json:"funcId,omitempty"` // For GetTaskStatus
@@ -261,7 +262,7 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest, ws *websocke
 
 	switch req.Type {
 	case "Login":
-		err = handleLogin(req.Token)
+		err = handleLogin(req.Token, req.Host)
 	case "Ping", "ping", "Heartbeat", "heartbeat":
 		res.Msg = "pong"
 	case "GetDeviceList":
@@ -319,13 +320,13 @@ func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest, ws *websocke
 	return res, nil
 }
 
-func handleLogin(token string) error {
+func handleLogin(token string, host string) error {
 	if token == "" {
 		logger.LogError("[Unified] Login failed: empty token")
 		return fmt.Errorf("token is required")
 	}
 	unifiedKey = token // Save token for later use
-	return EnsureLogin(token)
+	return EnsureLogin(token, host)
 }
 
 func previewPayload(b []byte) string {
@@ -350,7 +351,7 @@ func ensureGlobalApi() error {
 	}
 	// 尝试自动重新登录
 	logger.LogInfo("[Unified] globalApi is nil, attempting auto-relogin with existing token")
-	return handleLogin(unifiedKey)
+	return handleLogin(unifiedKey, "")
 }
 
 func handleGetDeviceList() (interface{}, error) {

@@ -17,19 +17,59 @@ import (
 
 var (
 	// jpyCore 是 JpyApiAgent 的核心对象，封装了登录、RTC连接、端口映射等全部通讯逻辑
-	jpyCore    *centCtl.Core
-	currentKey string
-	loginLock  sync.Mutex
+	jpyCore     *centCtl.Core
+	currentKey  string
+	currentHost string // 当前连接的服务器地址
+	loginLock   sync.Mutex
 )
 
 // EnsureLogin 确保已登录集控平台
 // 使用 JpyApiAgent 的 NewCore + Login + CenterGetDeviceList 替代旧的手动 WS 连接
-func EnsureLogin(key string) error {
+// host 参数可选，如果传入则更新配置并使用新地址连接
+func EnsureLogin(key string, host string) error {
 	loginLock.Lock()
 	defer loginLock.Unlock()
 
 	if key == "" {
 		return fmt.Errorf("secret key is required")
+	}
+
+	// 如果传入了新的 host，先更新配置
+	if host != "" {
+		// 清理 host：去掉协议前缀和路径后缀
+		cleanHost := host
+		if len(cleanHost) > 0 {
+			// 去掉 wss:// 或 ws:// 前缀
+			if len(cleanHost) > 6 && (cleanHost[:6] == "wss://" || cleanHost[:5] == "ws://") {
+				if cleanHost[:6] == "wss://" {
+					cleanHost = cleanHost[6:]
+				} else {
+					cleanHost = cleanHost[5:]
+				}
+			}
+			// 去掉 /ws 后缀
+			if len(cleanHost) > 3 && cleanHost[len(cleanHost)-3:] == "/ws" {
+				cleanHost = cleanHost[:len(cleanHost)-3]
+			}
+			// 去掉末尾的 /
+			if len(cleanHost) > 0 && cleanHost[len(cleanHost)-1] == '/' {
+				cleanHost = cleanHost[:len(cleanHost)-1]
+			}
+		}
+
+		newWsUrl := "wss://" + cleanHost + "/ws"
+
+		// 检查地址是否变化
+		if newWsUrl != config.GetWsUrl() || cleanHost != currentHost {
+			logs.Info("服务器地址变更: %s -> %s", config.GetWsUrl(), newWsUrl)
+			if err := config.SetWsUrl(newWsUrl); err != nil {
+				logs.Error("保存配置失败: %v", err)
+			}
+			// 地址变更，强制重新连接
+			currentKey = ""
+			currentHost = ""
+			jpyCore = nil
+		}
 	}
 
 	// 已登录且 key 未变，直接返回
@@ -58,6 +98,7 @@ func EnsureLogin(key string) error {
 
 	logs.Info("集控平台登录成功")
 	currentKey = key
+	currentHost = tableIP
 
 	// 将 Core 设置到 Manager 中供其他模块使用
 	manager.GetInstance().SetCore(jpyCore)
@@ -81,9 +122,10 @@ func forceRelogin(key string) error {
 	}
 	loginLock.Lock()
 	currentKey = ""
+	currentHost = ""
 	jpyCore = nil
 	loginLock.Unlock()
-	return EnsureLogin(key)
+	return EnsureLogin(key, "")
 }
 
 // GetGlobalApi 返回 JpyApiAgent 内部的 AdminApi 实例
@@ -102,7 +144,7 @@ func GetJpyCore() *centCtl.Core {
 
 // GetDevices 获取设备列表
 func GetDevices(ctx context.Context, req *model.GetDevicesRequest) (*ginHWrapper, error) {
-	if err := EnsureLogin(req.Key); err != nil {
+	if err := EnsureLogin(req.Key, ""); err != nil {
 		return nil, err
 	}
 
@@ -130,7 +172,7 @@ func GetMappings(ctx context.Context, req *model.GetMappingsRequest) (*ginHWrapp
 // ConnectDevice 创建端口映射连接
 // 使用 JpyApiAgent 的 CreatPortMapSocket5Rtc 替代旧的手动 RTC Token 获取和连接
 func ConnectDevice(ctx context.Context, req *model.ConnectRequest) (*model.Response, error) {
-	if err := EnsureLogin(req.Key); err != nil {
+	if err := EnsureLogin(req.Key, ""); err != nil {
 		return nil, err
 	}
 

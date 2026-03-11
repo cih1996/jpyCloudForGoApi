@@ -26,7 +26,7 @@ type DeviceCommandInfo struct {
 // 保持原有函数签名不变，确保 unified_handler.go 无需修改调用方式
 func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uint16, data interface{}, req bool, isSync bool, timeout time.Duration) (interface{}, error) {
 	// 1. 确保已登录
-	if err := EnsureLogin(key); err != nil {
+	if err := EnsureLogin(key, ""); err != nil {
 		return nil, fmt.Errorf("登录失败: %v", err)
 	}
 
@@ -231,7 +231,7 @@ func processResponse(res interface{}) interface{} {
 
 // findDeviceInfo 查找设备信息
 func findDeviceInfo(key string, deviceId uint64) (*DeviceCommandInfo, error) {
-	if err := EnsureLogin(key); err != nil {
+	if err := EnsureLogin(key, ""); err != nil {
 		return nil, err
 	}
 
