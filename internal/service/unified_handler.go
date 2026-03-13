@@ -371,6 +371,30 @@ func handleGetDeviceList() (interface{}, error) {
 	return ret, nil
 }
 
+// CheckDeviceOnline 检查设备是否在线（通过 API 接口）
+func CheckDeviceOnline(deviceID int) (bool, error) {
+	if err := ensureGlobalApi(); err != nil {
+		return false, err
+	}
+
+	ret, err := GetGlobalApi().UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
+		PageNum:  1,
+		PageSize: 999999,
+	})
+
+	if err != nil {
+		return false, fmt.Errorf(err.Msg)
+	}
+
+	for _, d := range ret.Records {
+		if int(d.DeviceInfo.DeviceId) == deviceID {
+			return d.DeviceInfo.Online, nil
+		}
+	}
+
+	return false, fmt.Errorf("设备 %d 未找到", deviceID)
+}
+
 // Helper to convert map to struct if needed, or just pass through
 // Since SendGenericCommandToDevice takes interface{}, we might need to process data
 // specific to each command type if necessary.

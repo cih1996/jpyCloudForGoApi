@@ -142,6 +142,13 @@ func GetJpyCore() *centCtl.Core {
 	return jpyCore
 }
 
+// GetCurrentKey 返回当前登录的 key（供 RPA 步骤重连使用）
+func GetCurrentKey() string {
+	loginLock.Lock()
+	defer loginLock.Unlock()
+	return currentKey
+}
+
 // GetDevices 获取设备列表
 func GetDevices(ctx context.Context, req *model.GetDevicesRequest) (*ginHWrapper, error) {
 	if err := EnsureLogin(req.Key, ""); err != nil {

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"io/fs"
 	"net/http"
 	"port-mapping-demo/internal/config"
+	"port-mapping-demo/internal/database"
+	"port-mapping-demo/internal/rpa"
+	_ "port-mapping-demo/internal/rpa/steps" // 注册步骤模块
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/framework"
 	"port-mapping-demo/pkg/logger"
@@ -35,6 +39,16 @@ func main() {
 		logs.Error("Failed to initialize unified logger: %v", err)
 	}
 
+	// Initialize Database
+	if err := database.Init("./data"); err != nil {
+		logs.Error("Failed to initialize database: %v", err)
+	} else {
+		logs.Info("数据库初始化成功")
+	}
+
+	// Start RPA Engine
+	rpa.GetEngine().Start()
+
 	// Register Routes
 	framework.Register("POST", "/api/devices", "Get list of devices", service.GetDevices)
 	framework.Register("POST", "/api/mappings", "Get active mappings", service.GetMappings)
@@ -47,17 +61,8 @@ func main() {
 
 	// Add Log Download Endpoint
 	r := gin.Default()
-	r.GET("/api/logs/download", func(c *gin.Context) {
-		logFile := "logs/unified_service.log"
-		c.Header("Content-Disposition", "attachment; filename=unified_service.log")
-		c.Header("Content-Type", "application/octet-stream")
-		c.File(logFile)
-	})
 
-	// WebSocket support for Unified Request
-	r.GET("/api/unified/ws", service.UnifiedWSHandler)
-
-	// CORS Middleware
+	// CORS Middleware - 必须在路由注册之前
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -71,6 +76,19 @@ func main() {
 		c.Next()
 	})
 
+	r.GET("/api/logs/download", func(c *gin.Context) {
+		logFile := "logs/unified_service.log"
+		c.Header("Content-Disposition", "attachment; filename=unified_service.log")
+		c.Header("Content-Type", "application/octet-stream")
+		c.File(logFile)
+	})
+
+	// WebSocket support for Unified Request
+	r.GET("/api/unified/ws", service.UnifiedWSHandler)
+
+	// RPA Routes
+	rpa.RegisterRoutes(r.Group("/api"))
+
 	// Bind registered routes to Gin
 	framework.BindHTTP(r)
 
@@ -81,11 +99,65 @@ func main() {
 		c.String(http.StatusOK, html)
 	})
 
-	// Static files
-	distPath := "./static"
-	r.Static("/assets", distPath+"/assets")
-	r.StaticFile("/", distPath+"/index.html")
-	r.StaticFile("/vite.svg", distPath+"/vite.svg")
+	// Static files - 使用嵌入的文件系统
+	staticFS := GetStaticFS()
+	staticSubFS := GetStaticSubFS()
+
+	r.GET("/assets/*filepath", func(c *gin.Context) {
+		c.FileFromFS(c.Request.URL.Path, staticFS)
+	})
+
+	r.GET("/", func(c *gin.Context) {
+		data, err := fs.ReadFile(staticSubFS, "index.html")
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Internal Server Error")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
+
+	r.GET("/vite.svg", func(c *gin.Context) {
+		data, err := fs.ReadFile(staticSubFS, "vite.svg")
+		if err != nil {
+			c.String(http.StatusNotFound, "Not Found")
+			return
+		}
+		c.Data(http.StatusOK, "image/svg+xml", data)
+	})
+
+	r.GET("/全球时区.xml", func(c *gin.Context) {
+		data, err := fs.ReadFile(staticSubFS, "全球时区.xml")
+		if err != nil {
+			c.String(http.StatusNotFound, "Not Found")
+			return
+		}
+		c.Data(http.StatusOK, "application/xml; charset=utf-8", data)
+	})
+
+	r.GET("/全球语言.xml", func(c *gin.Context) {
+		data, err := fs.ReadFile(staticSubFS, "全球语言.xml")
+		if err != nil {
+			c.String(http.StatusNotFound, "Not Found")
+			return
+		}
+		c.Data(http.StatusOK, "application/xml; charset=utf-8", data)
+	})
+
+	// SPA fallback: 所有未匹配的路由返回 index.html
+	r.NoRoute(func(c *gin.Context) {
+		// 如果是 API 请求，返回 404
+		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not Found"})
+			return
+		}
+		// 读取嵌入的 index.html
+		data, err := fs.ReadFile(staticSubFS, "index.html")
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Internal Server Error")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
 
 	// Start WebSocket Server
 	go framework.StartWS(1002)
