@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,8 +12,9 @@ import (
 )
 
 var (
-	db   *gorm.DB
-	once sync.Once
+	db          *gorm.DB
+	once        sync.Once
+	initialized bool
 )
 
 // Init 初始化数据库连接
@@ -44,11 +46,21 @@ func Init(dataDir string) error {
 			initErr = err
 			return
 		}
+
+		initialized = true
 	})
 	return initErr
+}
+
+// IsInitialized 检查数据库是否已初始化
+func IsInitialized() bool {
+	return initialized && db != nil
 }
 
 // DB 获取数据库实例
 func DB() *gorm.DB {
 	return db
 }
+
+// ErrNotInitialized 数据库未初始化错误
+var ErrNotInitialized = errors.New("database not initialized")

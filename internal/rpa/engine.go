@@ -127,6 +127,11 @@ func (e *Engine) loop() {
 
 // tick 单次轮询
 func (e *Engine) tick() {
+	// 检查数据库是否已初始化
+	if !database.IsInitialized() {
+		return
+	}
+
 	// 获取所有运行中的设备
 	configs, err := database.GetRunningDevices()
 	if err != nil {
