@@ -44,14 +44,61 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 
 		// 获取中间件对象（JpyApiAgent 在 CenterGetDeviceList 时已自动创建 RTC 连接）
 		middleAgent, ok := core.GetMiddleAgent(middlewareId)
-		if !ok || middleAgent == nil {
-			// 中间件未连接，尝试重新获取设备列表以触发连接
-			logs.Info("[device_control] 中间件 %d 未连接，尝试重新获取设备列表...", middlewareId)
-			if _, err := core.CenterGetDeviceList(); err != nil {
-				return nil, fmt.Errorf("中间件 %d 连接失败: %v", middlewareId, err)
+
+		// 检查中间件是否存在且连接正常（Code > 0 表示连接正常）
+		needReconnect := !ok || middleAgent == nil || middleAgent.Rtc == nil || middleAgent.Code <= 0
+
+		if needReconnect {
+			// 中间件未连接或连接断开，尝试重连
+			if middleAgent != nil {
+				logs.Info("[device_control] 中间件 %d 连接断开(Code=%d)，尝试重连...", middlewareId, middleAgent.Code)
+			} else {
+				logs.Info("[device_control] 中间件 %d 未连接，尝试创建连接...", middlewareId)
 			}
+
+			// 先尝试获取设备列表（会触发中间件创建，但可能忽略错误）
+			_, _ = core.CenterGetDeviceList()
+
+			// 再次检查中间件状态
 			middleAgent, ok = core.GetMiddleAgent(middlewareId)
-			if !ok || middleAgent == nil {
+			stillNeedReconnect := !ok || middleAgent == nil || middleAgent.Rtc == nil || middleAgent.Code <= 0
+
+			if stillNeedReconnect {
+				// 直接调用 CreatMiddlewareRtc 获取详细错误
+				logs.Info("[device_control] 中间件 %d 仍未连接，直接尝试创建 RTC 连接...", middlewareId)
+				var createErr error
+				middleAgent, createErr = core.CreatMiddlewareRtc(middlewareId, nil, nil, nil)
+
+				if createErr != nil {
+					errMsg := createErr.Error()
+					logs.Info("[device_control] CreatMiddlewareRtc 错误: %s", errMsg)
+					// 检查是否是 session 断开导致的错误（包括服务端返回 code=-1001）
+					if strings.Contains(errMsg, "closed") || strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "-1001") || strings.Contains(errMsg, "SESSION_EXPIRED") {
+						logs.Info("[device_control] session 可能断开，尝试强制重新登录...")
+						if reloginErr := forceRelogin(key); reloginErr != nil {
+							return nil, fmt.Errorf("重新登录失败: %v", reloginErr)
+						}
+						// 重新获取 core
+						core = GetJpyCore()
+						if core == nil {
+							return nil, fmt.Errorf("重新登录后 JpyApiAgent Core 仍未初始化")
+						}
+						// 再次尝试获取设备列表和创建中间件
+						if _, err := core.CenterGetDeviceList(); err != nil {
+							return nil, fmt.Errorf("重新登录后获取设备列表失败: %v", err)
+						}
+						middleAgent, createErr = core.CreatMiddlewareRtc(middlewareId, nil, nil, nil)
+						if createErr != nil {
+							return nil, fmt.Errorf("中间件 %d 连接失败: %v", middlewareId, createErr)
+						}
+					} else {
+						return nil, fmt.Errorf("中间件 %d 连接失败: %v", middlewareId, createErr)
+					}
+				}
+			}
+
+			// 最终检查
+			if middleAgent == nil {
 				return nil, fmt.Errorf("中间件 %d 不存在或未连接", middlewareId)
 			}
 		}
@@ -63,8 +110,8 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 		switch f {
 		case 4: // 获取设备详细信息
 			result, err = middleAgent.SyncGetDeviceDetails(d.DeviceId)
-		case 6: // 获取中间件下所有设备状态
-			result, err = middleAgent.SyncGetAllList()
+		case 6: // 获取中间件下所有设备在线状态
+			result, err = middleAgent.SyncGetOnlineList()
 		case 289: // 执行 Shell 命令
 			shell := extractStringField(data, "shell")
 			result, err = middleAgent.SyncShellCommand(d.DeviceId, shell)
@@ -245,7 +292,30 @@ func findDeviceInfo(key string, deviceId uint64) (*DeviceCommandInfo, error) {
 		PageSize: 999999,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("获取设备列表失败: %v", err)
+		errMsg := err.Msg
+		logs.Info("[findDeviceInfo] 获取设备列表失败: %s", errMsg)
+		// 检查是否是 session 断开导致的错误
+		if strings.Contains(errMsg, "closed") || strings.Contains(errMsg, "connection") || err.Code == -1001 {
+			logs.Info("[findDeviceInfo] session 可能断开，尝试强制重新登录...")
+			if reloginErr := forceRelogin(key); reloginErr != nil {
+				return nil, fmt.Errorf("重新登录失败: %v", reloginErr)
+			}
+			// 重新获取 globalApi
+			globalApi = GetGlobalApi()
+			if globalApi == nil {
+				return nil, fmt.Errorf("重新登录后仍未登录")
+			}
+			// 再次尝试获取设备列表
+			res, err = globalApi.UserDeviceCtl.GetUserDeviceList(&userDeviceCtl.GetUserDeviceListReq{
+				PageNum:  1,
+				PageSize: 999999,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("重新登录后获取设备列表失败: %v", err.Msg)
+			}
+		} else {
+			return nil, fmt.Errorf("获取设备列表失败: %v", errMsg)
+		}
 	}
 
 	for _, d := range res.Records {

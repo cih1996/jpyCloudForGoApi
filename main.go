@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"port-mapping-demo/internal/config"
 	"port-mapping-demo/internal/database"
+	"port-mapping-demo/internal/devicews"
 	"port-mapping-demo/internal/rpa"
 	_ "port-mapping-demo/internal/rpa/steps" // 注册步骤模块
 	"port-mapping-demo/internal/service"
@@ -89,6 +90,10 @@ func main() {
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))
 
+	// Device WS API Routes (先创建 deviceServer)
+	deviceServer := devicews.NewServer("0.0.0.0:1003")
+	deviceServer.RegisterAPIRoutes(r.Group("/api/devicews"))
+
 	// Bind registered routes to Gin
 	framework.BindHTTP(r)
 
@@ -161,6 +166,24 @@ func main() {
 
 	// Start WebSocket Server
 	go framework.StartWS(1002)
+
+	// Start Device WebSocket Server (端口 1003，用于设备连接)
+	// 设置回调（可选）
+	deviceServer.GetManager().SetOnConnect(func(dc *devicews.DeviceConn) {
+		logs.Info("[DeviceWS] 设备上线: %08X (%s)", dc.DeviceID, dc.Serialno)
+	})
+	deviceServer.GetManager().SetOnDisconnect(func(dc *devicews.DeviceConn) {
+		logs.Info("[DeviceWS] 设备离线: %08X (%s)", dc.DeviceID, dc.Serialno)
+	})
+
+	// 将 deviceServer 注册到 service 层供 API 调用
+	service.SetDeviceWSServer(deviceServer)
+
+	go func() {
+		if err := deviceServer.Start(); err != nil {
+			logs.Error("[DeviceWS] 服务启动失败: %v", err)
+		}
+	}()
 
 	// Start Server
 	logs.Info("API服务已启动，端口: 1001")
