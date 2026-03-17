@@ -15,10 +15,10 @@ JPY Server 是集控平台的本地代理服务，支持：
 
 ```bash
 # macOS / Linux
-./jpy-server install
+./jpy-cloud install
 
 # Windows (管理员权限)
-.\jpy-server.exe install
+.\jpy-cloud.exe install
 ```
 
 程序会自动安装到系统目录并添加到 PATH。
@@ -27,21 +27,21 @@ JPY Server 是集控平台的本地代理服务，支持：
 
 **macOS / Linux:**
 ```bash
-sudo cp jpy-server /usr/local/bin/
-sudo chmod +x /usr/local/bin/jpy-server
+sudo cp jpy-cloud /usr/local/bin/
+sudo chmod +x /usr/local/bin/jpy-cloud
 ```
 
 **Windows:**
-1. 将程序放到 `%LOCALAPPDATA%\jpy-server\`
+1. 将程序放到 `%LOCALAPPDATA%\jpy-cloud\`
 2. 添加该目录到系统 PATH 环境变量
 
 ### 安装路径
 
 | 系统 | 安装路径 |
 |------|----------|
-| macOS | `/usr/local/bin/jpy-server` |
-| Linux | `/usr/local/bin/jpy-server` |
-| Windows | `%LOCALAPPDATA%\jpy-server\jpy-server.exe` |
+| macOS | `/usr/local/bin/jpy-cloud` |
+| Linux | `/usr/local/bin/jpy-cloud` |
+| Windows | `%LOCALAPPDATA%\jpy-cloud\jpy-cloud.exe` |
 
 ## 命令参考
 
@@ -49,34 +49,34 @@ sudo chmod +x /usr/local/bin/jpy-server
 
 ```bash
 # 安装程序到系统
-jpy-server install
+jpy-cloud install
 
 # 卸载程序和服务
-jpy-server uninstall
+jpy-cloud uninstall
 
 # 升级到新版本
-./jpy-server-new upgrade
+./jpy-cloud-new upgrade
 ```
 
 ### 服务管理
 
 ```bash
 # 启动服务（前台运行，用于调试）
-jpy-server serve
+jpy-cloud serve
 
 # 安装为系统服务（开机自启）
-jpy-server service install
+jpy-cloud service install
 
 # 卸载系统服务
-jpy-server service uninstall
+jpy-cloud service uninstall
 
 # 启动/停止/重启服务
-jpy-server service start
-jpy-server service stop
-jpy-server service restart
+jpy-cloud service start
+jpy-cloud service stop
+jpy-cloud service restart
 
 # 查看服务状态
-jpy-server service status
+jpy-cloud service status
 ```
 
 ### 设备操作
@@ -85,37 +85,37 @@ jpy-server service status
 
 ```bash
 # 获取设备列表
-jpy-server devices -s <服务器地址> -k <API密钥>
+jpy-cloud devices -s <服务器地址> -k <API密钥>
 
 # 示例
-jpy-server devices -s https://114.67.244.162 -k your-api-key
+jpy-cloud devices -s https://114.67.244.162 -k your-api-key
 ```
 
 ```bash
 # 执行 Shell 命令
-jpy-server shell -s <服务器> -k <密钥> <设备ID> "<命令>"
+jpy-cloud shell -s <服务器> -k <密钥> <设备ID> "<命令>"
 
 # 示例
-jpy-server shell -s https://114.67.244.162 -k your-api-key 12345678 "ls -la /sdcard/"
+jpy-cloud shell -s https://114.67.244.162 -k your-api-key 12345678 "ls -la /sdcard/"
 ```
 
 ```bash
 # 截图
-jpy-server screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]
+jpy-cloud screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]
 
 # 示例
-jpy-server screenshot -s https://114.67.244.162 -k your-api-key 12345678
-jpy-server screenshot -s https://114.67.244.162 -k your-api-key 12345678 screen.png
+jpy-cloud screenshot -s https://114.67.244.162 -k your-api-key 12345678
+jpy-cloud screenshot -s https://114.67.244.162 -k your-api-key 12345678 screen.png
 ```
 
 ### 其他
 
 ```bash
 # 查看版本
-jpy-server version
+jpy-cloud version
 
 # 查看帮助
-jpy-server help
+jpy-cloud help
 ```
 
 ## 参数说明
@@ -150,18 +150,18 @@ launchctl list | grep jpy
 
 ### Linux (systemd)
 
-配置文件：`~/.config/systemd/user/jpy-server.service`
+配置文件：`~/.config/systemd/user/jpy-cloud.service`
 
 ```bash
 # 重载配置
 systemctl --user daemon-reload
 
 # 启用/禁用开机自启
-systemctl --user enable jpy-server
-systemctl --user disable jpy-server
+systemctl --user enable jpy-cloud
+systemctl --user disable jpy-cloud
 
 # 查看日志
-journalctl --user -u jpy-server -f
+journalctl --user -u jpy-cloud -f
 ```
 
 ### Windows
@@ -170,20 +170,20 @@ journalctl --user -u jpy-server -f
 
 ```cmd
 # 启动/停止
-sc start jpy-server
-sc stop jpy-server
+sc start jpy-cloud
+sc stop jpy-cloud
 
 # 查看状态
-sc query jpy-server
+sc query jpy-cloud
 ```
 
 ## 日志文件
 
 | 系统 | 日志路径 |
 |------|----------|
-| macOS | `~/.jpy-server/stdout.log`, `~/.jpy-server/stderr.log` |
-| Linux | `~/.jpy-server/stdout.log`, `~/.jpy-server/stderr.log` |
-| Windows | `%LOCALAPPDATA%\jpy-server\logs\` |
+| macOS | `~/.jpy-cloud/stdout.log`, `~/.jpy-cloud/stderr.log` |
+| Linux | `~/.jpy-cloud/stdout.log`, `~/.jpy-cloud/stderr.log` |
+| Windows | `%LOCALAPPDATA%\jpy-cloud\logs\` |
 
 ## 常见问题
 
@@ -193,10 +193,10 @@ CLI 命令可能会输出一些第三方库的 debug 日志，可以通过重定
 
 ```bash
 # macOS / Linux
-jpy-server devices -s https://example.com -k key 2>/dev/null
+jpy-cloud devices -s https://example.com -k key 2>/dev/null
 
 # 创建别名
-alias jpy='jpy-server 2>/dev/null'
+alias jpy='jpy-cloud 2>/dev/null'
 ```
 
 ### Q: 服务无法启动？
@@ -212,7 +212,7 @@ alias jpy='jpy-server 2>/dev/null'
 
 2. 查看日志：
    ```bash
-   cat ~/.jpy-server/stderr.log
+   cat ~/.jpy-cloud/stderr.log
    ```
 
 ### Q: Windows 安装失败？
@@ -222,7 +222,7 @@ alias jpy='jpy-server 2>/dev/null'
 ### Q: 如何完全卸载？
 
 ```bash
-jpy-server uninstall
+jpy-cloud uninstall
 ```
 
 这会自动停止服务、卸载服务配置、删除程序和数据目录。
