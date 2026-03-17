@@ -1,6 +1,6 @@
 .PHONY: build clean generate dist dev dist-all install uninstall
 
-APP_NAME := jpy-server
+APP_NAME := jpy-cloud
 DIST_DIR := dist
 VERSION := $(shell date +%Y%m%d)
 INSTALL_PATH := /usr/local/bin/$(APP_NAME)
@@ -30,8 +30,8 @@ install: build
 	sudo cp dist/$(APP_NAME) $(INSTALL_PATH)
 	sudo chmod +x $(INSTALL_PATH)
 	@echo "=== 安装完成！==="
-	@echo "运行 'jpy-server help' 查看帮助"
-	@echo "运行 'jpy-server service install' 安装为系统服务"
+	@echo "运行 'jpy-cloud help' 查看帮助"
+	@echo "运行 'jpy-cloud service install' 安装为系统服务"
 
 # 卸载
 uninstall:

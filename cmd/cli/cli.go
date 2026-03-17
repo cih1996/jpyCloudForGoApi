@@ -625,16 +625,16 @@ func Screenshot(platformURL, apiKey, deviceID, output string) error {
 func GetInstallPath() string {
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("LOCALAPPDATA"), "jpy-server", "jpy-server.exe")
+		return filepath.Join(os.Getenv("LOCALAPPDATA"), "jpy-cloud", "jpy-cloud.exe")
 	default:
-		return "/usr/local/bin/jpy-server"
+		return "/usr/local/bin/jpy-cloud"
 	}
 }
 
 // GetDataDir 获取数据目录
 func GetDataDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".jpy-server")
+	return filepath.Join(home, ".jpy-cloud")
 }
 
 // ServiceInstall 安装服务
@@ -674,9 +674,9 @@ func ServiceStart() error {
 	case "darwin":
 		return runCommand("launchctl", "load", getMacPlistPath())
 	case "linux":
-		return runCommand("systemctl", "--user", "start", "jpy-server")
+		return runCommand("systemctl", "--user", "start", "jpy-cloud")
 	case "windows":
-		return runCommand("sc", "start", "jpy-server")
+		return runCommand("sc", "start", "jpy-cloud")
 	default:
 		return fmt.Errorf("不支持的操作系统")
 	}
@@ -688,9 +688,9 @@ func ServiceStop() error {
 	case "darwin":
 		return runCommand("launchctl", "unload", getMacPlistPath())
 	case "linux":
-		return runCommand("systemctl", "--user", "stop", "jpy-server")
+		return runCommand("systemctl", "--user", "stop", "jpy-cloud")
 	case "windows":
-		return runCommand("sc", "stop", "jpy-server")
+		return runCommand("sc", "stop", "jpy-cloud")
 	default:
 		return fmt.Errorf("不支持的操作系统")
 	}
@@ -702,9 +702,9 @@ func ServiceStatus() error {
 	case "darwin":
 		return runCommand("launchctl", "list", "com.jpy.server")
 	case "linux":
-		return runCommand("systemctl", "--user", "status", "jpy-server")
+		return runCommand("systemctl", "--user", "status", "jpy-cloud")
 	case "windows":
-		return runCommand("sc", "query", "jpy-server")
+		return runCommand("sc", "query", "jpy-cloud")
 	default:
 		return fmt.Errorf("不支持的操作系统")
 	}
@@ -747,7 +747,7 @@ func installMacService(binPath, workDir string) error {
 	}
 
 	fmt.Printf("服务配置已写入: %s\n", plistPath)
-	fmt.Println("启动服务: jpy-server service start")
+	fmt.Println("启动服务: jpy-cloud service start")
 	return nil
 }
 
@@ -770,7 +770,7 @@ func getMacPlistPath() string {
 func installLinuxService(binPath, workDir string) error {
 	home, _ := os.UserHomeDir()
 	serviceDir := filepath.Join(home, ".config", "systemd", "user")
-	servicePath := filepath.Join(serviceDir, "jpy-server.service")
+	servicePath := filepath.Join(serviceDir, "jpy-cloud.service")
 
 	service := fmt.Sprintf(`[Unit]
 Description=JPY Server - 集控平台本地代理
@@ -793,19 +793,19 @@ WantedBy=default.target
 	}
 
 	runCommand("systemctl", "--user", "daemon-reload")
-	runCommand("systemctl", "--user", "enable", "jpy-server")
+	runCommand("systemctl", "--user", "enable", "jpy-cloud")
 
 	fmt.Printf("服务配置已写入: %s\n", servicePath)
-	fmt.Println("启动服务: jpy-server service start")
+	fmt.Println("启动服务: jpy-cloud service start")
 	return nil
 }
 
 func uninstallLinuxService() error {
 	ServiceStop()
-	runCommand("systemctl", "--user", "disable", "jpy-server")
+	runCommand("systemctl", "--user", "disable", "jpy-cloud")
 
 	home, _ := os.UserHomeDir()
-	servicePath := filepath.Join(home, ".config", "systemd", "user", "jpy-server.service")
+	servicePath := filepath.Join(home, ".config", "systemd", "user", "jpy-cloud.service")
 	os.Remove(servicePath)
 	runCommand("systemctl", "--user", "daemon-reload")
 
@@ -816,7 +816,7 @@ func uninstallLinuxService() error {
 // Windows 服务安装
 func installWindowsService(binPath, workDir string) error {
 	// 使用 sc 命令创建服务
-	cmd := exec.Command("sc", "create", "jpy-server",
+	cmd := exec.Command("sc", "create", "jpy-cloud",
 		fmt.Sprintf("binPath=%s serve", binPath),
 		"start=auto",
 		"DisplayName=JPY Server")
@@ -827,13 +827,13 @@ func installWindowsService(binPath, workDir string) error {
 	}
 
 	fmt.Println("服务已创建")
-	fmt.Println("启动服务: jpy-server service start")
+	fmt.Println("启动服务: jpy-cloud service start")
 	return nil
 }
 
 func uninstallWindowsService() error {
 	ServiceStop()
-	cmd := exec.Command("sc", "delete", "jpy-server")
+	cmd := exec.Command("sc", "delete", "jpy-cloud")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -937,7 +937,7 @@ func Upgrade(newBinPath string) error {
 	fmt.Println("启动服务...")
 	if err := ServiceStart(); err != nil {
 		fmt.Printf("启动失败: %v\n", err)
-		fmt.Println("可手动启动: jpy-server service start")
+		fmt.Println("可手动启动: jpy-cloud service start")
 	}
 
 	// 5. 删除备份

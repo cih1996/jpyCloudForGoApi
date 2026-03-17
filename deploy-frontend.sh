@@ -18,7 +18,7 @@ cp -r vue-app/dist/* static/
 cp -r vue-app/dist/* dist/static/
 
 echo "🔧 重新编译 Go 后端（嵌入新前端）..."
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o dist/jpy-server-darwin-arm64 .
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o dist/jpy-cloud-darwin-arm64 .
 
 echo "🔄 重启服务..."
 ai-hub services restart "集控平台" 2>/dev/null || echo "服务未运行，跳过重启"

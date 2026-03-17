@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.4"
+const VERSION = "1.0.5"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -59,7 +59,7 @@ func main() {
 	case "adb":
 		handleAdb()
 	case "version", "-v", "--version":
-		fmt.Printf("jpy-server version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("jpy-cloud version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -74,7 +74,7 @@ func printUsage() {
 JPY Server v%s - 集控平台本地代理
 
 用法:
-  jpy-server <命令> [参数]
+  jpy-cloud <命令> [参数]
 
 安装命令:
   install                  安装程序到系统并添加到 PATH
@@ -121,24 +121,24 @@ ADB 调试命令:
 
 工作原理:
   CLI 命令通过本地后端服务（127.0.0.1:1001）转发到集控平台。
-  使用设备命令前，请确保本地服务已启动：jpy-server service start
+  使用设备命令前，请确保本地服务已启动：jpy-cloud service start
 
 示例:
   # 安装程序
-  sudo ./jpy-server install
+  sudo ./jpy-cloud install
 
   # 安装并启动服务
-  jpy-server service install
-  jpy-server service start
+  jpy-cloud service install
+  jpy-cloud service start
 
   # 获取设备列表
-  jpy-server devices -s https://114.67.244.162 -k your-api-key
+  jpy-cloud devices -s https://114.67.244.162 -k your-api-key
 
   # 执行 Shell 命令
-  jpy-server shell -s https://114.67.244.162 -k your-api-key 12345678 "ls -la"
+  jpy-cloud shell -s https://114.67.244.162 -k your-api-key 12345678 "ls -la"
 
   # 查看日志
-  jpy-server logs -f
+  jpy-cloud logs -f
 `, VERSION)
 }
 
@@ -192,7 +192,7 @@ func handleUpgrade() {
 
 func handleService() {
 	if len(os.Args) < 3 {
-		fmt.Println("用法: jpy-server service <install|uninstall|start|stop|status|restart>")
+		fmt.Println("用法: jpy-cloud service <install|uninstall|start|stop|status|restart>")
 		return
 	}
 
@@ -208,7 +208,7 @@ func handleService() {
 		// 检查程序是否已安装
 		if _, err := os.Stat(binPath); os.IsNotExist(err) {
 			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
-			fmt.Println("请先执行: sudo ./jpy-server install")
+			fmt.Println("请先执行: sudo ./jpy-cloud install")
 			os.Exit(1)
 		}
 		if err := cli.ServiceInstall(binPath, workDir); err != nil {
@@ -222,7 +222,7 @@ func handleService() {
 		// 检查程序是否已安装
 		if _, err := os.Stat(binPath); os.IsNotExist(err) {
 			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
-			fmt.Println("请先执行: sudo ./jpy-server install")
+			fmt.Println("请先执行: sudo ./jpy-cloud install")
 			os.Exit(1)
 		}
 		if err := cli.ServiceStart(); err != nil {
@@ -240,7 +240,7 @@ func handleService() {
 		// 检查程序是否已安装
 		if _, err := os.Stat(binPath); os.IsNotExist(err) {
 			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
-			fmt.Println("请先执行: sudo ./jpy-server install")
+			fmt.Println("请先执行: sudo ./jpy-cloud install")
 			os.Exit(1)
 		}
 		cli.ServiceStop()
@@ -261,7 +261,7 @@ func handleDevices() {
 
 	if server == "" {
 		fmt.Println("错误: 缺少服务器地址")
-		fmt.Println("用法: jpy-server devices -s <服务器> -k <密钥> [-v] [--json]")
+		fmt.Println("用法: jpy-cloud devices -s <服务器> -k <密钥> [-v] [--json]")
 		os.Exit(1)
 	}
 
@@ -292,7 +292,7 @@ func handleShell() {
 
 	if server == "" {
 		fmt.Println("错误: 缺少服务器地址")
-		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令> [--json]")
+		fmt.Println("用法: jpy-cloud shell -s <服务器> -k <密钥> <设备ID> <命令> [--json]")
 		os.Exit(1)
 	}
 
@@ -309,7 +309,7 @@ func handleShell() {
 
 	if len(args) < 2 {
 		fmt.Println("错误: 缺少设备ID或命令")
-		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令> [--json]")
+		fmt.Println("用法: jpy-cloud shell -s <服务器> -k <密钥> <设备ID> <命令> [--json]")
 		os.Exit(1)
 	}
 
@@ -331,13 +331,13 @@ func handleScreenshot() {
 
 	if server == "" {
 		fmt.Println("错误: 缺少服务器地址")
-		fmt.Println("用法: jpy-server screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]")
+		fmt.Println("用法: jpy-cloud screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]")
 		os.Exit(1)
 	}
 
 	if len(remaining) < 1 {
 		fmt.Println("错误: 缺少设备ID")
-		fmt.Println("用法: jpy-server screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]")
+		fmt.Println("用法: jpy-cloud screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]")
 		os.Exit(1)
 	}
 
@@ -380,8 +380,8 @@ func handleLogs() {
 		fmt.Printf("  标准输出: %s\n", stdoutLog)
 		fmt.Printf("  错误输出: %s\n", stderrLog)
 		fmt.Println("\n使用方法:")
-		fmt.Println("  jpy-server logs -f        实时查看日志")
-		fmt.Println("  jpy-server logs -n 100    查看最近 100 行")
+		fmt.Println("  jpy-cloud logs -f        实时查看日志")
+		fmt.Println("  jpy-cloud logs -n 100    查看最近 100 行")
 		return
 	}
 
@@ -408,7 +408,7 @@ func handleTunnel() {
 
 	if server == "" || key == "" {
 		fmt.Println("错误: 缺少服务器地址或密钥")
-		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]")
+		fmt.Println("用法: jpy-cloud tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]")
 		os.Exit(1)
 	}
 
@@ -425,7 +425,7 @@ func handleTunnel() {
 
 	if len(args) < 3 {
 		fmt.Println("错误: 缺少参数")
-		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]")
+		fmt.Println("用法: jpy-cloud tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]")
 		os.Exit(1)
 	}
 
@@ -454,7 +454,7 @@ func handleDisconnect() {
 
 	if key == "" {
 		fmt.Println("错误: 缺少密钥")
-		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口> [--json]")
+		fmt.Println("用法: jpy-cloud disconnect -k <密钥> <本地端口> [--json]")
 		os.Exit(1)
 	}
 
@@ -471,7 +471,7 @@ func handleDisconnect() {
 
 	if len(args) < 1 {
 		fmt.Println("错误: 缺少本地端口")
-		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口> [--json]")
+		fmt.Println("用法: jpy-cloud disconnect -k <密钥> <本地端口> [--json]")
 		os.Exit(1)
 	}
 
@@ -516,8 +516,8 @@ func handleMappings() {
 func handleAdb() {
 	if len(os.Args) < 3 {
 		fmt.Println("用法:")
-		fmt.Println("  jpy-server adb -s <集控平台> -k <密钥> <设备ID> [--json]   开启 ADB WiFi")
-		fmt.Println("  jpy-server adb stop -s <集控平台> -k <密钥> <设备ID> [--json]   关闭 ADB WiFi")
+		fmt.Println("  jpy-cloud adb -s <集控平台> -k <密钥> <设备ID> [--json]   开启 ADB WiFi")
+		fmt.Println("  jpy-cloud adb stop -s <集控平台> -k <密钥> <设备ID> [--json]   关闭 ADB WiFi")
 		os.Exit(1)
 	}
 
@@ -526,7 +526,7 @@ func handleAdb() {
 		server, key, remaining := parseServerKey(os.Args[3:])
 		if key == "" {
 			fmt.Println("错误: 缺少密钥")
-			fmt.Println("用法: jpy-server adb stop -s <集控平台> -k <密钥> [设备ID] [--json]")
+			fmt.Println("用法: jpy-cloud adb stop -s <集控平台> -k <密钥> [设备ID] [--json]")
 			os.Exit(1)
 		}
 
@@ -556,7 +556,7 @@ func handleAdb() {
 
 	if server == "" || key == "" {
 		fmt.Println("错误: 缺少服务器地址或密钥")
-		fmt.Println("用法: jpy-server adb -s <集控平台> -k <密钥> <设备ID> [--json]")
+		fmt.Println("用法: jpy-cloud adb -s <集控平台> -k <密钥> <设备ID> [--json]")
 		os.Exit(1)
 	}
 
@@ -573,7 +573,7 @@ func handleAdb() {
 
 	if deviceIDStr == "" {
 		fmt.Println("错误: 缺少设备ID")
-		fmt.Println("用法: jpy-server adb -s <集控平台> -k <密钥> <设备ID> [--json]")
+		fmt.Println("用法: jpy-cloud adb -s <集控平台> -k <密钥> <设备ID> [--json]")
 		os.Exit(1)
 	}
 
