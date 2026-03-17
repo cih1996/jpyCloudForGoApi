@@ -418,6 +418,143 @@ func Disconnect(apiKey string, localPort int, jsonOutput bool) error {
 	return nil
 }
 
+// EnableAdbWifi 开启 ADB WiFi 调试（完整流程）
+// 1. 映射 9009 端口（RPA 通信）
+// 2. 通过 execShell 执行开启 ADB WiFi 的命令
+// 3. 映射 5555 端口（ADB 端口）
+// 4. 完成后可用 adb connect 127.0.0.1:5555
+func EnableAdbWifi(platformURL, apiKey string, deviceID int, jsonOutput bool) error {
+	log := func(msg string) {
+		if !jsonOutput {
+			fmt.Println(msg)
+		}
+	}
+
+	// 先登录
+	if err := EnsureLogin(platformURL, apiKey); err != nil {
+		return fmt.Errorf("登录失败: %v", err)
+	}
+
+	// 1. 映射 9009 端口（用于后续可能的 RPA 操作）
+	log("步骤 1/4: 映射 9009 端口...")
+	reqBody := map[string]interface{}{
+		"key":       apiKey,
+		"deviceId":  deviceID,
+		"localPort": 9009,
+		"phonePort": 9009,
+	}
+	jsonData, _ := json.Marshal(reqBody)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(LocalServerURL+"/api/connect", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("映射 9009 失败: %v", err)
+	}
+	resp.Body.Close()
+
+	// 2. 通过 execShell 执行开启 ADB WiFi 的命令
+	log("步骤 2/4: 执行 root 提权...")
+	// 先尝试 root 提权（可能失败，忽略）
+	CallUnified(platformURL, apiKey, "execShell", map[string]interface{}{
+		"deviceId": deviceID,
+		"shell":    "su -c 'echo root granted'",
+	})
+	time.Sleep(500 * time.Millisecond)
+
+	log("步骤 3/4: 开启 ADB WiFi 调试...")
+	// 执行开启 ADB WiFi 的 shell 命令
+	adbCmd := `su -c "setprop service.adb.tcp.port 5555 && stop adbd && start adbd && settings put global adb_enabled 1"`
+	result, err := CallUnified(platformURL, apiKey, "execShell", map[string]interface{}{
+		"deviceId": deviceID,
+		"shell":    adbCmd,
+	})
+	if err != nil {
+		return fmt.Errorf("开启 ADB WiFi 失败: %v", err)
+	}
+	if result.Code != 200 {
+		return fmt.Errorf("开启 ADB WiFi 失败: %s", result.Msg)
+	}
+
+	// 等待 ADB WiFi 启动
+	log("  等待 ADB 服务启动...")
+	time.Sleep(3 * time.Second)
+
+	// 4. 映射 5555 端口
+	log("步骤 4/4: 映射 5555 端口...")
+	reqBody["localPort"] = 5555
+	reqBody["phonePort"] = 5555
+	jsonData, _ = json.Marshal(reqBody)
+	resp, err = client.Post(LocalServerURL+"/api/connect", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("映射 5555 失败: %v", err)
+	}
+	resp.Body.Close()
+
+	// 完成
+	if jsonOutput {
+		OutputJSON(map[string]interface{}{
+			"success":  true,
+			"deviceId": deviceID,
+			"adbHost":  "127.0.0.1:5555",
+			"message":  "ADB WiFi 已开启，使用 adb connect 127.0.0.1:5555 连接",
+		})
+	} else {
+		fmt.Println("\n✓ ADB WiFi 调试已开启！")
+		fmt.Println("  连接命令: adb connect 127.0.0.1:5555")
+	}
+
+	return nil
+}
+
+// DisableAdbWifi 关闭 ADB WiFi 调试并断开隧道
+func DisableAdbWifi(platformURL, apiKey string, deviceID int, jsonOutput bool) error {
+	log := func(msg string) {
+		if !jsonOutput {
+			fmt.Println(msg)
+		}
+	}
+
+	// 如果提供了设备ID，尝试关闭 ADB WiFi
+	if deviceID > 0 {
+		log("关闭 ADB WiFi...")
+		// 先登录
+		if err := EnsureLogin(platformURL, apiKey); err == nil {
+			// 执行关闭 ADB WiFi 的 shell 命令
+			adbCmd := `su -c "setprop service.adb.tcp.port -1 && stop adbd && settings put global adb_enabled 0"`
+			CallUnified(platformURL, apiKey, "execShell", map[string]interface{}{
+				"deviceId": deviceID,
+				"shell":    adbCmd,
+			})
+		}
+	}
+
+	// 断开 9009 和 5555 端口映射
+	log("断开端口映射...")
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	for _, port := range []int{9009, 5555} {
+		reqBody := map[string]interface{}{
+			"key":       apiKey,
+			"localPort": port,
+		}
+		jsonData, _ := json.Marshal(reqBody)
+		resp, _ := client.Post(LocalServerURL+"/api/disconnect", "application/json", bytes.NewReader(jsonData))
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	if jsonOutput {
+		OutputJSON(map[string]interface{}{
+			"success": true,
+			"message": "ADB WiFi 已关闭",
+		})
+	} else {
+		fmt.Println("✓ ADB WiFi 调试已关闭")
+	}
+
+	return nil
+}
+
 // ExecuteShell 执行 Shell 命令
 func ExecuteShell(platformURL, apiKey, deviceID, command string, jsonOutput bool) error {
 	// 先登录

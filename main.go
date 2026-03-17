@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.3"
+const VERSION = "1.0.4"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -56,6 +56,8 @@ func main() {
 		handleDisconnect()
 	case "mappings", "mapping":
 		handleMappings()
+	case "adb":
+		handleAdb()
 	case "version", "-v", "--version":
 		fmt.Printf("jpy-server version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "--help":
@@ -97,6 +99,10 @@ JPY Server v%s - 集控平台本地代理
   tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]  建立端口映射
   disconnect -k <密钥> <本地端口> [--json]                               断开端口映射
   mappings [--json]                                                     查看当前所有端口映射
+
+ADB 调试命令:
+  adb -s <集控平台> -k <密钥> <设备ID> [--json]        开启 ADB WiFi 调试（一键完成）
+  adb stop -s <集控平台> -k <密钥> [设备ID] [--json]   关闭 ADB WiFi 并断开隧道
 
 日志命令:
   logs                     查看日志文件路径
@@ -502,6 +508,87 @@ func handleMappings() {
 			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
 		} else {
 			fmt.Printf("获取映射列表失败: %v\n", err)
+		}
+		os.Exit(1)
+	}
+}
+
+func handleAdb() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法:")
+		fmt.Println("  jpy-server adb -s <集控平台> -k <密钥> <设备ID> [--json]   开启 ADB WiFi")
+		fmt.Println("  jpy-server adb stop -s <集控平台> -k <密钥> <设备ID> [--json]   关闭 ADB WiFi")
+		os.Exit(1)
+	}
+
+	// 检查是否是 stop 子命令
+	if os.Args[2] == "stop" {
+		server, key, remaining := parseServerKey(os.Args[3:])
+		if key == "" {
+			fmt.Println("错误: 缺少密钥")
+			fmt.Println("用法: jpy-server adb stop -s <集控平台> -k <密钥> [设备ID] [--json]")
+			os.Exit(1)
+		}
+
+		jsonOutput := false
+		deviceID := 0
+		for _, arg := range remaining {
+			if arg == "--json" {
+				jsonOutput = true
+			} else {
+				fmt.Sscanf(arg, "%d", &deviceID)
+			}
+		}
+
+		if err := cli.DisableAdbWifi(server, key, deviceID, jsonOutput); err != nil {
+			if jsonOutput {
+				cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+			} else {
+				fmt.Printf("关闭 ADB WiFi 失败: %v\n", err)
+			}
+			os.Exit(1)
+		}
+		return
+	}
+
+	// 开启 ADB WiFi
+	server, key, remaining := parseServerKey(os.Args[2:])
+
+	if server == "" || key == "" {
+		fmt.Println("错误: 缺少服务器地址或密钥")
+		fmt.Println("用法: jpy-server adb -s <集控平台> -k <密钥> <设备ID> [--json]")
+		os.Exit(1)
+	}
+
+	// 过滤 --json 参数并获取设备ID
+	jsonOutput := false
+	var deviceIDStr string
+	for _, arg := range remaining {
+		if arg == "--json" {
+			jsonOutput = true
+		} else if deviceIDStr == "" {
+			deviceIDStr = arg
+		}
+	}
+
+	if deviceIDStr == "" {
+		fmt.Println("错误: 缺少设备ID")
+		fmt.Println("用法: jpy-server adb -s <集控平台> -k <密钥> <设备ID> [--json]")
+		os.Exit(1)
+	}
+
+	var deviceID int
+	fmt.Sscanf(deviceIDStr, "%d", &deviceID)
+	if deviceID == 0 {
+		fmt.Println("错误: 无效的设备ID")
+		os.Exit(1)
+	}
+
+	if err := cli.EnableAdbWifi(server, key, deviceID, jsonOutput); err != nil {
+		if jsonOutput {
+			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+		} else {
+			fmt.Printf("开启 ADB WiFi 失败: %v\n", err)
 		}
 		os.Exit(1)
 	}
