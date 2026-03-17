@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.2"
+const VERSION = "1.0.3"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -88,15 +88,15 @@ JPY Server v%s - 集控平台本地代理
   service status           查看服务状态
   service restart          重启服务
 
-设备命令（需要 -s 和 -k 参数，本地服务必须已启动）:
-  devices -s <集控平台> -k <密钥> [-v]           获取设备列表（-v 显示详细信息）
-  shell -s <集控平台> -k <密钥> <设备ID> <命令>   执行 Shell 命令
-  screenshot -s <集控平台> -k <密钥> <设备ID>    截图
+设备命令（需要 -s 和 -k 参数，本地服务必须已启动，支持 --json 输出）:
+  devices -s <集控平台> -k <密钥> [-v] [--json]           获取设备列表
+  shell -s <集控平台> -k <密钥> <设备ID> <命令> [--json]   执行 Shell 命令
+  screenshot -s <集控平台> -k <密钥> <设备ID>             截图
 
-隧道命令（端口映射/打洞）:
-  tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口>  建立端口映射
-  disconnect -k <密钥> <本地端口>                              断开端口映射
-  mappings                                                    查看当前所有端口映射
+隧道命令（端口映射/打洞，支持 --json 输出）:
+  tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]  建立端口映射
+  disconnect -k <密钥> <本地端口> [--json]                               断开端口映射
+  mappings [--json]                                                     查看当前所有端口映射
 
 日志命令:
   logs                     查看日志文件路径
@@ -111,6 +111,7 @@ JPY Server v%s - 集控平台本地代理
   -s, --server    集控平台地址（如 https://114.67.244.162）
   -k, --key       集控平台 API 密钥
   -v, --verbose   显示详细信息
+  --json          输出 JSON 格式（不截断，适合程序解析）
 
 工作原理:
   CLI 命令通过本地后端服务（127.0.0.1:1001）转发到集控平台。
@@ -254,21 +255,28 @@ func handleDevices() {
 
 	if server == "" {
 		fmt.Println("错误: 缺少服务器地址")
-		fmt.Println("用法: jpy-server devices -s <服务器> -k <密钥> [-v]")
+		fmt.Println("用法: jpy-server devices -s <服务器> -k <密钥> [-v] [--json]")
 		os.Exit(1)
 	}
 
-	// 检查是否有 -v 参数
+	// 检查参数
 	verbose := false
+	jsonOutput := false
 	for _, arg := range remaining {
 		if arg == "-v" || arg == "--verbose" {
 			verbose = true
-			break
+		}
+		if arg == "--json" {
+			jsonOutput = true
 		}
 	}
 
-	if err := cli.GetDevices(server, key, verbose); err != nil {
-		fmt.Printf("获取设备失败: %v\n", err)
+	if err := cli.GetDevices(server, key, verbose, jsonOutput); err != nil {
+		if jsonOutput {
+			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+		} else {
+			fmt.Printf("获取设备失败: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -278,21 +286,36 @@ func handleShell() {
 
 	if server == "" {
 		fmt.Println("错误: 缺少服务器地址")
-		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令>")
+		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令> [--json]")
 		os.Exit(1)
 	}
 
-	if len(remaining) < 2 {
+	// 过滤 --json 参数
+	jsonOutput := false
+	var args []string
+	for _, arg := range remaining {
+		if arg == "--json" {
+			jsonOutput = true
+		} else {
+			args = append(args, arg)
+		}
+	}
+
+	if len(args) < 2 {
 		fmt.Println("错误: 缺少设备ID或命令")
-		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令>")
+		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令> [--json]")
 		os.Exit(1)
 	}
 
-	deviceID := remaining[0]
-	command := remaining[1]
+	deviceID := args[0]
+	command := args[1]
 
-	if err := cli.ExecuteShell(server, key, deviceID, command); err != nil {
-		fmt.Printf("执行失败: %v\n", err)
+	if err := cli.ExecuteShell(server, key, deviceID, command, jsonOutput); err != nil {
+		if jsonOutput {
+			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+		} else {
+			fmt.Printf("执行失败: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -379,28 +402,43 @@ func handleTunnel() {
 
 	if server == "" || key == "" {
 		fmt.Println("错误: 缺少服务器地址或密钥")
-		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口>")
+		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]")
 		os.Exit(1)
 	}
 
-	if len(remaining) < 3 {
+	// 过滤 --json 参数
+	jsonOutput := false
+	var args []string
+	for _, arg := range remaining {
+		if arg == "--json" {
+			jsonOutput = true
+		} else {
+			args = append(args, arg)
+		}
+	}
+
+	if len(args) < 3 {
 		fmt.Println("错误: 缺少参数")
-		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口>")
+		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口> [--json]")
 		os.Exit(1)
 	}
 
 	var deviceID, localPort, phonePort int
-	fmt.Sscanf(remaining[0], "%d", &deviceID)
-	fmt.Sscanf(remaining[1], "%d", &localPort)
-	fmt.Sscanf(remaining[2], "%d", &phonePort)
+	fmt.Sscanf(args[0], "%d", &deviceID)
+	fmt.Sscanf(args[1], "%d", &localPort)
+	fmt.Sscanf(args[2], "%d", &phonePort)
 
 	if deviceID == 0 || localPort == 0 || phonePort == 0 {
 		fmt.Println("错误: 无效的设备ID或端口号")
 		os.Exit(1)
 	}
 
-	if err := cli.Connect(server, key, deviceID, localPort, phonePort); err != nil {
-		fmt.Printf("建立隧道失败: %v\n", err)
+	if err := cli.Connect(server, key, deviceID, localPort, phonePort, jsonOutput); err != nil {
+		if jsonOutput {
+			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+		} else {
+			fmt.Printf("建立隧道失败: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -410,33 +448,61 @@ func handleDisconnect() {
 
 	if key == "" {
 		fmt.Println("错误: 缺少密钥")
-		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口>")
+		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口> [--json]")
 		os.Exit(1)
 	}
 
-	if len(remaining) < 1 {
+	// 过滤 --json 参数
+	jsonOutput := false
+	var args []string
+	for _, arg := range remaining {
+		if arg == "--json" {
+			jsonOutput = true
+		} else {
+			args = append(args, arg)
+		}
+	}
+
+	if len(args) < 1 {
 		fmt.Println("错误: 缺少本地端口")
-		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口>")
+		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口> [--json]")
 		os.Exit(1)
 	}
 
 	var localPort int
-	fmt.Sscanf(remaining[0], "%d", &localPort)
+	fmt.Sscanf(args[0], "%d", &localPort)
 
 	if localPort == 0 {
 		fmt.Println("错误: 无效的端口号")
 		os.Exit(1)
 	}
 
-	if err := cli.Disconnect(key, localPort); err != nil {
-		fmt.Printf("断开隧道失败: %v\n", err)
+	if err := cli.Disconnect(key, localPort, jsonOutput); err != nil {
+		if jsonOutput {
+			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+		} else {
+			fmt.Printf("断开隧道失败: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
 
 func handleMappings() {
-	if err := cli.GetMappings(); err != nil {
-		fmt.Printf("获取映射列表失败: %v\n", err)
+	// 检查 --json 参数
+	jsonOutput := false
+	for _, arg := range os.Args[2:] {
+		if arg == "--json" {
+			jsonOutput = true
+			break
+		}
+	}
+
+	if err := cli.GetMappings(jsonOutput); err != nil {
+		if jsonOutput {
+			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
+		} else {
+			fmt.Printf("获取映射列表失败: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }

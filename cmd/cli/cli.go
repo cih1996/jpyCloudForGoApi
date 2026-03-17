@@ -84,8 +84,14 @@ func EnsureLogin(platformURL, apiKey string) error {
 	return err
 }
 
+// OutputJSON 输出 JSON 格式
+func OutputJSON(data interface{}) {
+	jsonData, _ := json.MarshalIndent(data, "", "  ")
+	fmt.Println(string(jsonData))
+}
+
 // GetDevices 获取设备列表
-func GetDevices(platformURL, apiKey string, verbose bool) error {
+func GetDevices(platformURL, apiKey string, verbose, jsonOutput bool) error {
 	// 先登录
 	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
@@ -113,9 +119,58 @@ func GetDevices(platformURL, apiKey string, verbose bool) error {
 		// 兼容 list 字段
 		devices, ok = dataMap["list"].([]interface{})
 		if !ok || len(devices) == 0 {
-			fmt.Println("暂无设备")
+			if jsonOutput {
+				OutputJSON(map[string]interface{}{"devices": []interface{}{}})
+			} else {
+				fmt.Println("暂无设备")
+			}
 			return nil
 		}
+	}
+
+	// JSON 输出模式
+	if jsonOutput {
+		var deviceList []map[string]interface{}
+		for _, d := range devices {
+			record, ok := d.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			dev, ok := record["deviceInfo"].(map[string]interface{})
+			if !ok {
+				dev = record
+			}
+
+			deviceID := 0
+			if id, ok := dev["deviceId"].(float64); ok {
+				deviceID = int(id)
+			}
+
+			item := map[string]interface{}{
+				"deviceId": deviceID,
+				"uuid":     dev["uuid"],
+				"brand":    dev["brand"],
+				"online":   dev["online"],
+				"ip":       dev["ip"],
+			}
+
+			// S5 代理
+			if s5str, ok := dev["s5info"].(string); ok && s5str != "" {
+				var s5data map[string]interface{}
+				if json.Unmarshal([]byte(s5str), &s5data) == nil {
+					item["s5info"] = s5data
+				}
+			}
+
+			// 隧道状态
+			if ports, ok := mappings[deviceID]; ok && len(ports) > 0 {
+				item["tunnels"] = ports
+			}
+
+			deviceList = append(deviceList, item)
+		}
+		OutputJSON(map[string]interface{}{"devices": deviceList})
+		return nil
 	}
 
 	if verbose {
@@ -236,7 +291,7 @@ func GetMappingsQuiet() map[int][]int {
 }
 
 // GetMappings 获取当前端口映射列表
-func GetMappings() error {
+func GetMappings(jsonOutput bool) error {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Post(LocalServerURL+"/api/mappings", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
@@ -256,6 +311,11 @@ func GetMappings() error {
 		return fmt.Errorf("解析响应失败: %v", err)
 	}
 
+	if jsonOutput {
+		OutputJSON(data)
+		return nil
+	}
+
 	if len(data.Mappings) == 0 {
 		fmt.Println("当前无活跃的端口映射")
 		return nil
@@ -272,7 +332,7 @@ func GetMappings() error {
 }
 
 // Connect 建立端口映射（隧道）
-func Connect(platformURL, apiKey string, deviceID, localPort, phonePort int) error {
+func Connect(platformURL, apiKey string, deviceID, localPort, phonePort int, jsonOutput bool) error {
 	// 先登录
 	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
@@ -306,12 +366,21 @@ func Connect(platformURL, apiKey string, deviceID, localPort, phonePort int) err
 		return fmt.Errorf("映射失败: %s", result.Message)
 	}
 
-	fmt.Printf("✓ 端口映射建立成功: 本地 %d -> 设备 %d 端口 %d\n", localPort, deviceID, phonePort)
+	if jsonOutput {
+		OutputJSON(map[string]interface{}{
+			"success":   true,
+			"deviceId":  deviceID,
+			"localPort": localPort,
+			"phonePort": phonePort,
+		})
+	} else {
+		fmt.Printf("✓ 端口映射建立成功: 本地 %d -> 设备 %d 端口 %d\n", localPort, deviceID, phonePort)
+	}
 	return nil
 }
 
 // Disconnect 断开端口映射
-func Disconnect(apiKey string, localPort int) error {
+func Disconnect(apiKey string, localPort int, jsonOutput bool) error {
 	reqBody := map[string]interface{}{
 		"key":       apiKey,
 		"localPort": localPort,
@@ -338,12 +407,19 @@ func Disconnect(apiKey string, localPort int) error {
 		return fmt.Errorf("断开失败: %s", result.Message)
 	}
 
-	fmt.Printf("✓ 已断开本地端口 %d 的映射\n", localPort)
+	if jsonOutput {
+		OutputJSON(map[string]interface{}{
+			"success":   true,
+			"localPort": localPort,
+		})
+	} else {
+		fmt.Printf("✓ 已断开本地端口 %d 的映射\n", localPort)
+	}
 	return nil
 }
 
 // ExecuteShell 执行 Shell 命令
-func ExecuteShell(platformURL, apiKey, deviceID, command string) error {
+func ExecuteShell(platformURL, apiKey, deviceID, command string, jsonOutput bool) error {
 	// 先登录
 	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
@@ -363,7 +439,9 @@ func ExecuteShell(platformURL, apiKey, deviceID, command string) error {
 	}
 
 	// 输出结果
-	if result.Data != nil {
+	if jsonOutput {
+		OutputJSON(result.Data)
+	} else if result.Data != nil {
 		data, _ := json.MarshalIndent(result.Data, "", "  ")
 		fmt.Println(string(data))
 	} else {
