@@ -1,133 +1,241 @@
-# Go 端口转发服务 (Go Port Transfer Service)
+# JPY Server
 
-本项目是一个**高性能端口转发与设备管理服务**，基于 [JpyApiAgent](https://github.com/cih1996/JpyApiAgent) 通讯框架，支持统一的 HTTP/WebSocket API 接口。
-
-## 🚀 概览
-
-该服务提供了一个模块化的后端，用于管理设备连接和端口映射。内部通讯层基于 **JpyApiAgent** 实现，涵盖集控平台登录、WebRTC 打洞、中间件通信及端口映射等核心能力。对外采用**统一 API 架构**，所有业务端点均可通过 HTTP (POST) 和 WebSocket 访问，并确保跨协议的数据结构一致性。
+集控平台本地代理服务，支持 Web 界面和 CLI 命令行操作。
 
 ## ✨ 核心特性
 
-*   **JpyApiAgent 通讯框架**：集控平台登录、设备 RTC 打洞、中间件同步指令等底层通讯全部由 JpyApiAgent 处理。
-*   **统一 API 架构**：所有业务逻辑通过相同的 Request/Response 结构暴露给 HTTP 和 WebSocket。
-*   **交互式文档**：提供自动生成的交互式 API 文档，访问 `/doc` 即可查看。
-*   **双协议支持**：
-    *   **HTTP API**：监听端口 `1001` (仅限 POST)。
-    *   **WebSocket**：监听端口 `1002`。
-*   **严格类型检查**：使用 Go 泛型严格定义和验证 Request/Response 模型。
-*   **Docker 就绪**：经过优化的多阶段 Docker 构建流程。
+- 🖥️ **Web 管理界面**：设备管理、截图、Shell、OCR 识别
+- 🔧 **CLI 命令行工具**：独立运行，无需配置文件
+- 🚀 **系统服务**：支持开机自启（macOS/Linux/Windows）
+- 📦 **单文件部署**：前端嵌入二进制，无需额外静态文件
+- 🌍 **跨平台支持**：Windows、macOS、Linux
+- 🔌 **统一 API 架构**：HTTP/WebSocket 双协议支持
 
 ## 🛠️ 快速开始
 
+### 下载安装
+
+从 [Releases](https://github.com/cih1996/jpyCloudForGoApi/releases) 下载对应平台的二进制文件。
+
+**macOS / Linux:**
+```bash
+chmod +x jpy-server-darwin-arm64
+sudo ./jpy-server-darwin-arm64 install
+```
+
+**Windows (管理员权限):**
+```cmd
+.\jpy-server-windows-amd64.exe install
+```
+
+### 启动服务
+
+```bash
+# 安装为系统服务（开机自启）
+jpy-server service install
+jpy-server service start
+
+# 或前台运行（调试用）
+jpy-server serve
+```
+
+### 访问 Web 界面
+
+启动后访问：http://localhost:1001
+
+## 📖 CLI 命令
+
+### 安装/卸载
+
+```bash
+jpy-server install        # 安装程序到系统
+jpy-server uninstall      # 卸载程序和服务
+./jpy-server-new upgrade  # 升级到新版本
+```
+
+### 服务管理
+
+```bash
+jpy-server service install    # 安装为系统服务
+jpy-server service uninstall  # 卸载系统服务
+jpy-server service start      # 启动服务
+jpy-server service stop       # 停止服务
+jpy-server service restart    # 重启服务
+jpy-server service status     # 查看状态
+```
+
+### 设备操作
+
+所有设备命令需要 `-s`（服务器地址）和 `-k`（API 密钥）参数：
+
+```bash
+# 获取设备列表
+jpy-server devices -s https://example.com -k your-api-key
+
+# 执行 Shell 命令
+jpy-server shell -s https://example.com -k your-api-key 12345678 "ls -la"
+
+# 截图
+jpy-server screenshot -s https://example.com -k your-api-key 12345678
+jpy-server screenshot -s https://example.com -k your-api-key 12345678 output.png
+```
+
+### 其他
+
+```bash
+jpy-server version  # 查看版本
+jpy-server help     # 查看帮助
+```
+
+## 🔌 端口说明
+
+| 端口 | 用途 |
+|------|------|
+| 1001 | HTTP API + Web 界面 |
+| 1002 | WebSocket 通信 |
+| 1003 | 设备连接 |
+
+## 📁 安装路径
+
+| 系统 | 程序路径 | 数据目录 |
+|------|----------|----------|
+| macOS | `/usr/local/bin/jpy-server` | `~/.jpy-server/` |
+| Linux | `/usr/local/bin/jpy-server` | `~/.jpy-server/` |
+| Windows | `%LOCALAPPDATA%\jpy-server\jpy-server.exe` | `%LOCALAPPDATA%\jpy-server\` |
+
+## ⚙️ 系统服务配置
+
+### macOS (launchd)
+
+配置文件：`~/Library/LaunchAgents/com.jpy.server.plist`
+
+```bash
+launchctl list | grep jpy  # 查看状态
+```
+
+### Linux (systemd)
+
+配置文件：`~/.config/systemd/user/jpy-server.service`
+
+```bash
+journalctl --user -u jpy-server -f  # 查看日志
+```
+
+### Windows
+
+```cmd
+sc query jpy-server  # 查看状态
+```
+
+## 📝 日志文件
+
+| 系统 | 路径 |
+|------|------|
+| macOS/Linux | `~/.jpy-server/stdout.log`, `~/.jpy-server/stderr.log` |
+| Windows | `%LOCALAPPDATA%\jpy-server\logs\` |
+
+## 🔧 开发构建
+
 ### 前置条件
 
-*   Go 1.25+
-*   Docker (可选)
+- Go 1.21+
+- Node.js 18+ (前端)
+- Docker (可选)
 
-### 本地开发
+### 构建命令
 
-1.  **编译二进制文件**
-    ```bash
-    go build -o server main.go
-    ```
+```bash
+# 开发构建（前端 + 后端 + 重启服务）
+make dev
 
-2.  **运行服务**
-    ```bash
-    ./server
-    ```
-    服务启动后地址如下：
-    *   HTTP Server: `http://0.0.0.0:1001`
-    *   WebSocket Server: `ws://0.0.0.0:1002`
+# 仅构建后端
+make build
 
-3.  **查看文档**
-    在浏览器中打开 `http://localhost:1001/doc`。
+# 多平台打包
+make dist-all
+```
 
 ### 🐳 Docker 部署
 
-**选项 1: 使用 Docker Compose (推荐)**
-
-这是构建和启动服务最简单的方法。
-
 ```bash
+# 使用 Docker Compose
 docker compose up -d --build
+
+# 或手动构建
+docker build -t go-port-trans .
+docker run -d -p 1001:1001 -p 1002:1002 --name port-trans go-port-trans
 ```
 
-**选项 2: 手动构建与运行**
+## 📚 API 文档
 
-1.  **构建镜像**
-    ```bash
-    docker build -t go-port-trans .
-    ```
-
-2.  **运行容器**
-    ```bash
-    docker run -d \
-      -p 1001:1001 \
-      -p 1002:1002 \
-      --name port-trans \
-      go-port-trans
-    ```
-    *注意：如果遇到 `image 'go-port-trans:latest' not found` 错误，请确保步骤 1 构建成功。*
-
-## 📚 API 文档与用法
-
-本项目内置了自托管的文档页面。
-访问 `/doc` 端点 (例如 `http://localhost:1001/doc`) 可以：
-*   查看所有可用端点。
-*   检查 Request/Response JSON Schema。
-*   **一键复制**：复制完整的 API 定义上下文供 AI 助手使用。
+访问 `http://localhost:1001/doc` 查看交互式 API 文档。
 
 ### WebSocket 协议
 
-WebSocket 接口使用简单的信封协议 (Envelope Protocol) 将请求路由到与 HTTP API 相同的处理程序。
-
 **连接地址**: `ws://<host>:1002`
 
-**请求信封 (Request Envelope)**:
+**请求格式**:
 ```json
 {
-  "path": "/api/connect",      // 对应 HTTP 路由路径
-  "id": "unique-req-id",       // 可选的相关性 ID
-  "data": {                    // 实际请求负载 (与 HTTP POST body 相同)
-    "key": "...",
-    "deviceId": 123
-  }
+  "path": "/api/connect",
+  "id": "unique-req-id",
+  "data": { "key": "...", "deviceId": 123 }
 }
 ```
 
-**响应信封 (Response Envelope)**:
+**响应格式**:
 ```json
 {
-  "id": "unique-req-id",       // 回显请求 ID
+  "id": "unique-req-id",
   "path": "/api/connect",
-  "success": true,             // 执行状态
-  "message": "",               // 失败时的错误信息
-  "data": { ... }              // 响应负载
+  "success": true,
+  "message": "",
+  "data": { ... }
 }
 ```
+
+## ❓ 常见问题
+
+### CLI 输出 debug 日志？
+
+第三方库可能输出 debug 日志，可通过重定向过滤：
+
+```bash
+jpy-server devices -s https://example.com -k key 2>/dev/null
+```
+
+### 服务无法启动？
+
+1. 检查端口占用：`lsof -i :1001`
+2. 查看日志：`cat ~/.jpy-server/stderr.log`
+
+### Windows 安装失败？
+
+需要以管理员身份运行命令提示符或 PowerShell。
 
 ## 📂 项目结构
 
 ```
 .
-├── Dockerfile              # Docker 构建配置
-├── main.go                 # 应用程序入口与路由注册
-├── run.sh                  # 启动脚本
+├── main.go                 # 应用入口与 CLI
+├── cmd/cli/                # CLI 实现
 ├── internal/
-│   ├── config/             # 运行时配置管理
-│   ├── manager/            # 状态管理 (单例)
-│   ├── model/              # Request/Response 结构体定义
-│   └── service/            # 业务逻辑实现（登录、设备控制、统一处理）
-├── third_party/
-│   └── JpyApiAgent/        # JpyApiAgent 通讯框架（集控平台、RTC 打洞、中间件通信）
-└── pkg/
-    ├── framework/          # Web/WS 框架与自动文档引擎
-    ├── netclient/          # 网络客户端抽象（RTC/TCP/WS）
-    ├── public/             # 公共常量与消息定义
-    └── portmap/            # 核心端口转发逻辑
+│   ├── config/             # 配置管理
+│   ├── service/            # 业务逻辑
+│   ├── devicews/           # 设备 WebSocket
+│   ├── rpa/                # RPA 引擎
+│   └── database/           # 数据库
+├── pkg/
+│   ├── framework/          # Web/WS 框架
+│   └── logger/             # 日志
+├── vue-app/                # 前端源码
+└── static/                 # 编译后的前端（embed）
 ```
 
 ## 🔗 关联项目
 
-*   **前端仓库地址**：[https://github.com/cih1996/jp-cloud-script/](https://github.com/cih1996/jp-cloud-script/)
-*   **通讯框架 JpyApiAgent**：[https://github.com/cih1996/JpyApiAgent](https://github.com/cih1996/JpyApiAgent)
+- [JpyApiAgent](https://github.com/cih1996/JpyApiAgent) - 通讯框架
+
+## License
+
+MIT

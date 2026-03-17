@@ -1,22 +1,298 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"port-mapping-demo/cmd/cli"
 	"port-mapping-demo/internal/config"
 	"port-mapping-demo/internal/database"
 	"port-mapping-demo/internal/devicews"
 	"port-mapping-demo/internal/rpa"
-	_ "port-mapping-demo/internal/rpa/steps" // 注册步骤模块
+	_ "port-mapping-demo/internal/rpa/steps"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/framework"
 	"port-mapping-demo/pkg/logger"
+	"runtime"
 
 	"github.com/ghp3000/logs"
 	"github.com/gin-gonic/gin"
 )
 
+const VERSION = "1.0.1"
+
 func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(0)
+	}
+
+	cmd := os.Args[1]
+
+	switch cmd {
+	case "serve", "server", "run":
+		runServer()
+	case "install":
+		handleInstall()
+	case "uninstall":
+		handleUninstall()
+	case "upgrade", "update":
+		handleUpgrade()
+	case "service":
+		handleService()
+	case "devices", "device":
+		handleDevices()
+	case "shell", "sh":
+		handleShell()
+	case "screenshot", "ss":
+		handleScreenshot()
+	case "version", "-v", "--version":
+		fmt.Printf("jpy-server version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
+	case "help", "-h", "--help":
+		printUsage()
+	default:
+		fmt.Printf("未知命令: %s\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Printf(`
+JPY Server v%s - 集控平台本地代理
+
+用法:
+  jpy-server <命令> [参数]
+
+安装命令:
+  install                  安装程序到系统并添加到 PATH
+  uninstall                卸载程序和服务
+  upgrade                  升级到当前版本
+
+服务命令:
+  serve                    启动服务（前台运行）
+  service install          安装为系统服务（开机自启）
+  service uninstall        卸载系统服务
+  service start            启动服务
+  service stop             停止服务
+  service status           查看服务状态
+  service restart          重启服务
+
+设备命令（需要 -s 和 -k 参数）:
+  devices -s <服务器> -k <密钥>              获取设备列表
+  shell -s <服务器> -k <密钥> <设备ID> <命令>  执行 Shell 命令
+  screenshot -s <服务器> -k <密钥> <设备ID>   截图
+
+其他:
+  version                  显示版本
+  help                     显示帮助
+
+参数说明:
+  -s, --server    服务器地址（如 https://example.com）
+  -k, --key       API 密钥
+
+示例:
+  # 安装程序
+  ./jpy-server install
+
+  # 安装并启动服务
+  jpy-server service install
+  jpy-server service start
+
+  # 获取设备列表
+  jpy-server devices -s https://example.com -k your-api-key
+
+  # 执行 Shell 命令
+  jpy-server shell -s https://example.com -k your-api-key 12345678 "ls -la"
+
+  # 升级程序
+  ./jpy-server-new upgrade
+`, VERSION)
+}
+
+// parseServerKey 解析 -s 和 -k 参数
+func parseServerKey(args []string) (server, key string, remaining []string) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-s", "--server":
+			if i+1 < len(args) {
+				server = args[i+1]
+				i++
+			}
+		case "-k", "--key":
+			if i+1 < len(args) {
+				key = args[i+1]
+				i++
+			}
+		default:
+			remaining = append(remaining, args[i])
+		}
+	}
+	return
+}
+
+func handleInstall() {
+	binPath, _ := os.Executable()
+	binPath, _ = filepath.Abs(binPath)
+
+	if err := cli.Install(binPath); err != nil {
+		fmt.Printf("安装失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleUninstall() {
+	if err := cli.Uninstall(); err != nil {
+		fmt.Printf("卸载失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleUpgrade() {
+	binPath, _ := os.Executable()
+	binPath, _ = filepath.Abs(binPath)
+
+	if err := cli.Upgrade(binPath); err != nil {
+		fmt.Printf("升级失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleService() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法: jpy-server service <install|uninstall|start|stop|status|restart>")
+		return
+	}
+
+	action := os.Args[2]
+	binPath := cli.GetInstallPath()
+	workDir := cli.GetDataDir()
+
+	// 确保工作目录存在
+	os.MkdirAll(workDir, 0755)
+
+	switch action {
+	case "install":
+		// 检查程序是否已安装
+		if _, err := os.Stat(binPath); os.IsNotExist(err) {
+			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
+			fmt.Println("请先执行: sudo ./jpy-server install")
+			os.Exit(1)
+		}
+		if err := cli.ServiceInstall(binPath, workDir); err != nil {
+			fmt.Printf("安装失败: %v\n", err)
+		}
+	case "uninstall":
+		if err := cli.ServiceUninstall(); err != nil {
+			fmt.Printf("卸载失败: %v\n", err)
+		}
+	case "start":
+		// 检查程序是否已安装
+		if _, err := os.Stat(binPath); os.IsNotExist(err) {
+			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
+			fmt.Println("请先执行: sudo ./jpy-server install")
+			os.Exit(1)
+		}
+		if err := cli.ServiceStart(); err != nil {
+			fmt.Printf("启动失败: %v\n", err)
+		} else {
+			fmt.Println("服务已启动")
+		}
+	case "stop":
+		if err := cli.ServiceStop(); err != nil {
+			fmt.Printf("停止失败: %v\n", err)
+		} else {
+			fmt.Println("服务已停止")
+		}
+	case "restart":
+		// 检查程序是否已安装
+		if _, err := os.Stat(binPath); os.IsNotExist(err) {
+			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
+			fmt.Println("请先执行: sudo ./jpy-server install")
+			os.Exit(1)
+		}
+		cli.ServiceStop()
+		if err := cli.ServiceStart(); err != nil {
+			fmt.Printf("重启失败: %v\n", err)
+		} else {
+			fmt.Println("服务已重启")
+		}
+	case "status":
+		cli.ServiceStatus()
+	default:
+		fmt.Printf("未知操作: %s\n", action)
+	}
+}
+
+func handleDevices() {
+	server, key, _ := parseServerKey(os.Args[2:])
+
+	if server == "" {
+		fmt.Println("错误: 缺少服务器地址")
+		fmt.Println("用法: jpy-server devices -s <服务器> -k <密钥>")
+		os.Exit(1)
+	}
+
+	if err := cli.GetDevices(server, key); err != nil {
+		fmt.Printf("获取设备失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleShell() {
+	server, key, remaining := parseServerKey(os.Args[2:])
+
+	if server == "" {
+		fmt.Println("错误: 缺少服务器地址")
+		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令>")
+		os.Exit(1)
+	}
+
+	if len(remaining) < 2 {
+		fmt.Println("错误: 缺少设备ID或命令")
+		fmt.Println("用法: jpy-server shell -s <服务器> -k <密钥> <设备ID> <命令>")
+		os.Exit(1)
+	}
+
+	deviceID := remaining[0]
+	command := remaining[1]
+
+	if err := cli.ExecuteShell(server, key, deviceID, command); err != nil {
+		fmt.Printf("执行失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleScreenshot() {
+	server, key, remaining := parseServerKey(os.Args[2:])
+
+	if server == "" {
+		fmt.Println("错误: 缺少服务器地址")
+		fmt.Println("用法: jpy-server screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]")
+		os.Exit(1)
+	}
+
+	if len(remaining) < 1 {
+		fmt.Println("错误: 缺少设备ID")
+		fmt.Println("用法: jpy-server screenshot -s <服务器> -k <密钥> <设备ID> [输出文件]")
+		os.Exit(1)
+	}
+
+	deviceID := remaining[0]
+	output := ""
+	if len(remaining) > 1 {
+		output = remaining[1]
+	}
+
+	if err := cli.Screenshot(server, key, deviceID, output); err != nil {
+		fmt.Printf("截图失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runServer() {
 	config.LoadConfig()
 	logs.SetLevel("INFO", logs.LevelInfo)
 
@@ -63,7 +339,7 @@ func main() {
 	// Add Log Download Endpoint
 	r := gin.Default()
 
-	// CORS Middleware - 必须在路由注册之前
+	// CORS Middleware
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -90,7 +366,7 @@ func main() {
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))
 
-	// Device WS API Routes (先创建 deviceServer)
+	// Device WS API Routes
 	deviceServer := devicews.NewServer("0.0.0.0:1003")
 	deviceServer.RegisterAPIRoutes(r.Group("/api/devicews"))
 
@@ -104,7 +380,7 @@ func main() {
 		c.String(http.StatusOK, html)
 	})
 
-	// Static files - 使用嵌入的文件系统
+	// Static files
 	staticFS := GetStaticFS()
 	staticSubFS := GetStaticSubFS()
 
@@ -148,14 +424,12 @@ func main() {
 		c.Data(http.StatusOK, "application/xml; charset=utf-8", data)
 	})
 
-	// SPA fallback: 所有未匹配的路由返回 index.html
+	// SPA fallback
 	r.NoRoute(func(c *gin.Context) {
-		// 如果是 API 请求，返回 404
 		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Not Found"})
 			return
 		}
-		// 读取嵌入的 index.html
 		data, err := fs.ReadFile(staticSubFS, "index.html")
 		if err != nil {
 			c.String(http.StatusInternalServerError, "Internal Server Error")
@@ -167,8 +441,7 @@ func main() {
 	// Start WebSocket Server
 	go framework.StartWS(1002)
 
-	// Start Device WebSocket Server (端口 1003，用于设备连接)
-	// 设置回调（可选）
+	// Start Device WebSocket Server
 	deviceServer.GetManager().SetOnConnect(func(dc *devicews.DeviceConn) {
 		logs.Info("[DeviceWS] 设备上线: %08X (%s)", dc.DeviceID, dc.Serialno)
 	})
@@ -176,7 +449,6 @@ func main() {
 		logs.Info("[DeviceWS] 设备离线: %08X (%s)", dc.DeviceID, dc.Serialno)
 	})
 
-	// 将 deviceServer 注册到 service 层供 API 调用
 	service.SetDeviceWSServer(deviceServer)
 
 	go func() {
@@ -186,9 +458,11 @@ func main() {
 	}()
 
 	// Start Server
-	logs.Info("API服务已启动，端口: 1001")
+	logs.Info("JPY Server v%s 已启动", VERSION)
+	logs.Info("API服务端口: 1001")
+	logs.Info("WebSocket端口: 1002")
+	logs.Info("设备连接端口: 1003")
 
-	// Fix: Trusted proxies warning
 	if err := r.SetTrustedProxies(nil); err != nil {
 		logs.Error("Failed to set trusted proxies", err)
 	}

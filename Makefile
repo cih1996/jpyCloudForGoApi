@@ -1,8 +1,9 @@
-.PHONY: build clean generate dist dev dist-all
+.PHONY: build clean generate dist dev dist-all install uninstall
 
 APP_NAME := jpy-server
 DIST_DIR := dist
 VERSION := $(shell date +%Y%m%d)
+INSTALL_PATH := /usr/local/bin/$(APP_NAME)
 
 # 开发构建：编译前端 + 后端，复制静态文件，重启服务
 dev:
@@ -22,6 +23,24 @@ dev:
 # 仅构建后端
 build:
 	go build -o dist/$(APP_NAME) .
+
+# 安装到系统（需要 sudo）
+install: build
+	@echo "=== 安装到 $(INSTALL_PATH) ==="
+	sudo cp dist/$(APP_NAME) $(INSTALL_PATH)
+	sudo chmod +x $(INSTALL_PATH)
+	@echo "=== 安装完成！==="
+	@echo "运行 'jpy-server help' 查看帮助"
+	@echo "运行 'jpy-server service install' 安装为系统服务"
+
+# 卸载
+uninstall:
+	@echo "=== 停止并卸载服务 ==="
+	-$(INSTALL_PATH) service stop 2>/dev/null || true
+	-$(INSTALL_PATH) service uninstall 2>/dev/null || true
+	@echo "=== 删除程序 ==="
+	sudo rm -f $(INSTALL_PATH)
+	@echo "=== 卸载完成！==="
 
 generate:
 	./tools/generate_schema.sh
