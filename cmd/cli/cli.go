@@ -14,31 +14,40 @@ import (
 	"time"
 )
 
-// APIRequest 发送 API 请求
-func APIRequest(serverURL, secretKey, method, path string, body interface{}) (map[string]interface{}, error) {
-	url := strings.TrimRight(serverURL, "/") + path
+// UnifiedRequest 统一 API 请求结构
+type UnifiedRequest struct {
+	Type  string      `json:"type"`
+	Seq   int64       `json:"seq"`
+	Token string      `json:"token,omitempty"`
+	Host  string      `json:"host,omitempty"`
+	Data  interface{} `json:"data,omitempty"`
+}
 
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		reqBody = bytes.NewReader(data)
+// UnifiedResponse 统一 API 响应结构
+type UnifiedResponse struct {
+	Code int         `json:"code"`
+	Msg  string      `json:"msg"`
+	Data interface{} `json:"data"`
+}
+
+// CallUnified 调用统一 API
+func CallUnified(serverURL, apiKey, reqType string, data interface{}) (*UnifiedResponse, error) {
+	url := strings.TrimRight(serverURL, "/") + "/api/unified"
+
+	reqBody := UnifiedRequest{
+		Type:  reqType,
+		Seq:   time.Now().UnixMilli(),
+		Token: apiKey,
+		Data:  data,
 	}
 
-	req, err := http.NewRequest(method, url, reqBody)
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	if secretKey != "" {
-		req.Header.Set("Authorization", "Bearer "+secretKey)
-	}
-
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %v", err)
 	}
@@ -49,24 +58,47 @@ func APIRequest(serverURL, secretKey, method, path string, body interface{}) (ma
 		return nil, err
 	}
 
-	var result map[string]interface{}
+	var result UnifiedResponse
 	if err := json.Unmarshal(respData, &result); err != nil {
-		return map[string]interface{}{"raw": string(respData)}, nil
+		return nil, fmt.Errorf("解析响应失败: %v", err)
 	}
 
-	return result, nil
+	if result.Code != 200 {
+		return nil, fmt.Errorf("API 错误: %s", result.Msg)
+	}
+
+	return &result, nil
+}
+
+// EnsureLogin 确保已登录
+func EnsureLogin(serverURL, apiKey string) error {
+	_, err := CallUnified(serverURL, apiKey, "Login", nil)
+	return err
 }
 
 // GetDevices 获取设备列表
-func GetDevices(serverURL, secretKey string) error {
-	result, err := APIRequest(serverURL, secretKey, "GET", "/api/devicews/devices", nil)
+func GetDevices(serverURL, apiKey string) error {
+	// 先登录
+	if err := EnsureLogin(serverURL, apiKey); err != nil {
+		return fmt.Errorf("登录失败: %v", err)
+	}
+
+	// 获取设备列表
+	result, err := CallUnified(serverURL, apiKey, "GetDeviceList", nil)
 	if err != nil {
 		return err
 	}
 
-	devices, ok := result["devices"].([]interface{})
+	// 解析设备列表
+	dataMap, ok := result.Data.(map[string]interface{})
+	if !ok {
+		fmt.Println("暂无设备")
+		return nil
+	}
+
+	devices, ok := dataMap["list"].([]interface{})
 	if !ok || len(devices) == 0 {
-		fmt.Println("暂无设备连接")
+		fmt.Println("暂无设备")
 		return nil
 	}
 
@@ -74,60 +106,96 @@ func GetDevices(serverURL, secretKey string) error {
 	fmt.Println(strings.Repeat("-", 60))
 
 	for _, d := range devices {
-		dev := d.(map[string]interface{})
-		deviceID := fmt.Sprintf("%08X", int(dev["deviceId"].(float64)))
+		dev, ok := d.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		deviceID := ""
+		if id, ok := dev["deviceId"].(float64); ok {
+			deviceID = fmt.Sprintf("%d", int(id))
+		}
+
 		serialno := ""
 		if s, ok := dev["serialno"].(string); ok {
 			serialno = s
 		}
+
 		model := ""
 		if m, ok := dev["model"].(string); ok {
 			model = m
 		}
-		fmt.Printf("%-12s %-20s %-15s %-10s\n", deviceID, serialno, model, "在线")
+
+		status := "离线"
+		if online, ok := dev["online"].(bool); ok && online {
+			status = "在线"
+		} else if state, ok := dev["state"].(float64); ok && state > 0 {
+			status = "在线"
+		}
+
+		fmt.Printf("%-12s %-20s %-15s %-10s\n", deviceID, serialno, model, status)
 	}
 
 	return nil
 }
 
 // ExecuteShell 执行 Shell 命令
-func ExecuteShell(serverURL, secretKey, deviceID, command string) error {
-	body := map[string]interface{}{
-		"deviceId": deviceID,
-		"command":  command,
+func ExecuteShell(serverURL, apiKey, deviceID, command string) error {
+	// 先登录
+	if err := EnsureLogin(serverURL, apiKey); err != nil {
+		return fmt.Errorf("登录失败: %v", err)
 	}
 
-	result, err := APIRequest(serverURL, secretKey, "POST", "/api/devicews/shell", body)
+	// 解析设备ID
+	var devID int
+	fmt.Sscanf(deviceID, "%d", &devID)
+
+	// 执行 Shell
+	result, err := CallUnified(serverURL, apiKey, "execShell", map[string]interface{}{
+		"deviceId": devID,
+		"shell":    command,
+	})
 	if err != nil {
 		return err
 	}
 
-	if output, ok := result["output"].(string); ok {
-		fmt.Println(output)
-	} else {
-		data, _ := json.MarshalIndent(result, "", "  ")
+	// 输出结果
+	if result.Data != nil {
+		data, _ := json.MarshalIndent(result.Data, "", "  ")
 		fmt.Println(string(data))
+	} else {
+		fmt.Println("执行成功")
 	}
 
 	return nil
 }
 
-// Screenshot 截图
-func Screenshot(serverURL, secretKey, deviceID, output string) error {
-	body := map[string]interface{}{
-		"deviceId": deviceID,
+// Screenshot 截图（通过集控平台）
+func Screenshot(serverURL, apiKey, deviceID, output string) error {
+	// 先登录
+	if err := EnsureLogin(serverURL, apiKey); err != nil {
+		return fmt.Errorf("登录失败: %v", err)
 	}
 
-	result, err := APIRequest(serverURL, secretKey, "POST", "/api/devicews/screenshot", body)
+	// 解析设备ID
+	var devID int
+	fmt.Sscanf(deviceID, "%d", &devID)
+
+	// 请求截图
+	result, err := CallUnified(serverURL, apiKey, "screenshot", map[string]interface{}{
+		"deviceId": devID,
+	})
 	if err != nil {
 		return err
 	}
 
-	if _, ok := result["data"].(string); ok {
+	// 检查结果
+	if result.Data != nil {
 		if output == "" {
 			output = fmt.Sprintf("screenshot_%s.png", time.Now().Format("20060102_150405"))
 		}
-		fmt.Printf("截图已保存: %s\n", output)
+		// TODO: 保存截图数据到文件
+		fmt.Printf("截图请求已发送，设备ID: %d\n", devID)
 	} else {
 		return fmt.Errorf("截图失败")
 	}
