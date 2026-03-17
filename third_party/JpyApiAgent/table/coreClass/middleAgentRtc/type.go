@@ -90,6 +90,19 @@ func get(middleId uint64) *TypeInfo {
 func del(middleId uint64) {
 	server.Delete(middleId)
 }
+
+// ClearAll 清理所有中间件对象（用于重新登录时）
+func ClearAll() {
+	server.Range(func(key, value any) bool {
+		if agent, ok := value.(*TypeInfo); ok && agent.Rtc != nil {
+			agent.Rtc.Close()
+		}
+		server.Delete(key)
+		return true
+	})
+	logs.Info("[middleAgentRtc] 已清理所有中间件对象")
+}
+
 func getAll() []*TypeInfo {
 	middleAgentList := make([]*TypeInfo, 0)
 	server.Range(func(key, value any) bool {

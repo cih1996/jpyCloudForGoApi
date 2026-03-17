@@ -76,7 +76,7 @@ func (s *SetProxyAndWaitStep) setProxy(deviceID int, params map[string]interface
 		Type: "setSocket5",
 		Seq:  int(time.Now().Unix()),
 		Data: map[string]interface{}{
-			"deviceId": deviceID,
+			"deviceId": float64(deviceID),
 			"s5Url":    s5Url,
 			"nOutSwID": int(nOutSwID),
 			"lineType": int(lineType),

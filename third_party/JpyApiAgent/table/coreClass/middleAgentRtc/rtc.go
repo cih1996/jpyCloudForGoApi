@@ -10,18 +10,21 @@ import (
 	"github.com/ghp3000/netclient/NetClient"
 	"github.com/ghp3000/netclient/bufferPool"
 	"github.com/ghp3000/public"
-	"github.com/pkg/errors"
 )
 
 //, parOpen NetClient.ConnectEvent, parClose NetClient.ConnectEvent, parCallBack NetClient.Callback, getToken func(mid uint64) (*rtcCtl.GetRtcTokenRes, *ErrPkg.Err)
 
-func New(p *publicStruct.MiddleAgentTypeInfo) (*TypeInfo, error) {
+// New 创建或获取中间件对象
+// 返回值: (*TypeInfo, isNew bool, error)
+// isNew 为 true 表示新创建，false 表示复用已有对象
+func New(p *publicStruct.MiddleAgentTypeInfo) (*TypeInfo, bool, error) {
 	middleAgentList := getAll()
-	//检查是否已存在
+	//检查是否已存在，如果存在则更新设备列表并返回已有对象
 	for n := 0; n < len(middleAgentList); n++ {
 		if middleAgentList[n].MiddlewareId == p.MiddlewareId {
 			middleAgentList[n].Devices = p.Devices
-			return nil, errors.New(fmt.Sprintf("中间件对象已存在,mid=%d,只允许更新设备列表", p.MiddlewareId))
+			logs.Info("中间件[%d]对象已存在，复用现有对象并更新设备列表", p.MiddlewareId)
+			return middleAgentList[n], false, nil
 		}
 	}
 	var a TypeInfo
@@ -37,7 +40,7 @@ func New(p *publicStruct.MiddleAgentTypeInfo) (*TypeInfo, error) {
 	a.FuncClose = p.FuncClose
 	a.FuncCallBack = p.FuncCallBack
 	save(a.MiddlewareId, &a)
-	return &a, nil
+	return &a, true, nil
 }
 
 // Connect 中间件发起打洞连接

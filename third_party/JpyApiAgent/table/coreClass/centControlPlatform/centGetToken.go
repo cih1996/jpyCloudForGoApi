@@ -3,23 +3,71 @@ package centControlPlatform
 import (
 	"adminApi/rtcCtl"
 	"adminApi/userDeviceCtl"
+	"encoding/json"
 
 	"cnb.cool/accbot/goTool/ErrPkg"
+	"cnb.cool/accbot/goTool/TcpTypePkg"
 	"github.com/ghp3000/logs"
 )
+
+// getRtcTokenRawResponse 原始响应结构（包含 code 和 data）
+type getRtcTokenRawResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Url   string `json:"url"`
+		Token string `json:"token"`
+	} `json:"data"`
+}
 
 // CenterGetMiddlewareRtcToken 获取中间件控制打洞Token
 func (c *Core) CenterGetMiddlewareRtcToken(middlewareId uint64) (*rtcCtl.GetRtcTokenRes, *ErrPkg.Err) {
 	midId := int64(middlewareId)
-	midToken, err1 := c.server.api.RtcCtl.GetRtcToken(rtcCtl.GetRtcTokenReq{
-		TbProxyId: &midId,
-	})
-	if err1 != nil {
-		logs.Error("中间件RTC Token获取错误%s", err1.Msg)
-		return nil, err1
+	req := rtcCtl.GetRtcTokenReq{TbProxyId: &midId}
+
+	// 直接调用底层 session 发送请求，获取原始响应
+	// 这样即使 code != 200，我们也能拿到 data
+	payload := map[string]any{
+		"app":  "rtcCtl",
+		"fun":  "getRtcToken",
+		"data": req,
 	}
-	//logs.Info("中间件[%d]获取Token成功：url=%s,token=%s", TbProxyId, midToken.Url, midToken.Token)
-	return midToken, nil
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, ErrPkg.NewErrE("序列化失败", err)
+	}
+
+	// 发送请求并获取原始响应
+	response, sendErr := c.server.session.SendCallBytes(TcpTypePkg.TcpType_Text_AutoGzip, jsonBytes, 30*1000)
+	if sendErr != nil {
+		logs.Error("中间件RTC Token请求失败: %s", sendErr.Msg)
+		return nil, sendErr
+	}
+
+	// 解析原始响应
+	var rawResp getRtcTokenRawResponse
+	if jsonErr := json.Unmarshal(response, &rawResp); jsonErr != nil {
+		return nil, ErrPkg.NewErrE("响应解析失败", jsonErr)
+	}
+
+	// 检查是否有有效的 url 和 token（即使 code != 200）
+	if rawResp.Data.Url != "" && rawResp.Data.Token != "" {
+		if rawResp.Code != 200 {
+			logs.Info("中间件[%d]获取Token成功（忽略code=%d, msg=%s）：url=%s", middlewareId, rawResp.Code, rawResp.Msg, rawResp.Data.Url)
+		}
+		return &rtcCtl.GetRtcTokenRes{
+			Url:   rawResp.Data.Url,
+			Token: rawResp.Data.Token,
+		}, nil
+	}
+
+	// 没有有效数据，返回错误
+	if rawResp.Code != 200 {
+		logs.Error("中间件RTC Token获取错误: code=%d, msg=%s", rawResp.Code, rawResp.Msg)
+		return nil, ErrPkg.NewErr(rawResp.Code, rawResp.Msg)
+	}
+
+	return nil, ErrPkg.NewErrE("响应数据为空", nil)
 }
 
 // CenterGetPortMapSocket5RtcToken 获取设备端口映射打洞Token

@@ -25,3 +25,13 @@ temp/
 *.sw?
 
 !src/libs/jpy-sdk/dist
+
+# Go binaries
+jpy-server
+jpy-server-*
+port-mapping-demo
+*.exe
+go-port-trans
+# Build output
+static/
+data/

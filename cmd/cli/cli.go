@@ -85,7 +85,7 @@ func EnsureLogin(platformURL, apiKey string) error {
 }
 
 // GetDevices 获取设备列表
-func GetDevices(platformURL, apiKey string) error {
+func GetDevices(platformURL, apiKey string, verbose bool) error {
 	// 先登录
 	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
@@ -96,6 +96,9 @@ func GetDevices(platformURL, apiKey string) error {
 	if err != nil {
 		return err
 	}
+
+	// 获取当前端口映射
+	mappings := GetMappingsQuiet()
 
 	// 解析设备列表
 	dataMap, ok := result.Data.(map[string]interface{})
@@ -115,8 +118,15 @@ func GetDevices(platformURL, apiKey string) error {
 		}
 	}
 
-	fmt.Printf("%-12s %-20s %-15s %-10s\n", "设备ID", "序列号", "型号", "状态")
-	fmt.Println(strings.Repeat("-", 60))
+	if verbose {
+		// 详细模式
+		fmt.Printf("%-10s %-18s %-10s %-8s %-16s %-30s %-10s\n",
+			"设备ID", "序列号", "型号", "状态", "IP", "S5代理", "隧道")
+		fmt.Println(strings.Repeat("-", 110))
+	} else {
+		fmt.Printf("%-10s %-18s %-10s %-8s %-10s\n", "设备ID", "序列号", "型号", "状态", "隧道")
+		fmt.Println(strings.Repeat("-", 60))
+	}
 
 	for _, d := range devices {
 		record, ok := d.(map[string]interface{})
@@ -131,9 +141,11 @@ func GetDevices(platformURL, apiKey string) error {
 			dev = record
 		}
 
-		deviceID := ""
+		deviceID := 0
+		deviceIDStr := ""
 		if id, ok := dev["deviceId"].(float64); ok {
-			deviceID = fmt.Sprintf("%d", int(id))
+			deviceID = int(id)
+			deviceIDStr = fmt.Sprintf("%d", deviceID)
 		}
 
 		serialno := ""
@@ -151,9 +163,182 @@ func GetDevices(platformURL, apiKey string) error {
 			status = "在线"
 		}
 
-		fmt.Printf("%-12s %-20s %-15s %-10s\n", deviceID, serialno, model, status)
+		ip := ""
+		if i, ok := dev["ip"].(string); ok {
+			ip = i
+		}
+
+		// 解析 S5 代理信息
+		s5Info := "-"
+		if s5str, ok := dev["s5info"].(string); ok && s5str != "" {
+			var s5data map[string]interface{}
+			if json.Unmarshal([]byte(s5str), &s5data) == nil {
+				if s5url, ok := s5data["s5Url"].(string); ok {
+					// 简化显示
+					if len(s5url) > 28 {
+						s5Info = s5url[:28] + "..."
+					} else {
+						s5Info = s5url
+					}
+				}
+			}
+		}
+
+		// 获取隧道状态
+		tunnelInfo := "-"
+		if ports, ok := mappings[deviceID]; ok && len(ports) > 0 {
+			portStrs := make([]string, len(ports))
+			for i, p := range ports {
+				portStrs[i] = fmt.Sprintf("%d", p)
+			}
+			tunnelInfo = strings.Join(portStrs, ",")
+		}
+
+		if verbose {
+			fmt.Printf("%-10s %-18s %-10s %-8s %-16s %-30s %-10s\n",
+				deviceIDStr, serialno, model, status, ip, s5Info, tunnelInfo)
+		} else {
+			fmt.Printf("%-10s %-18s %-10s %-8s %-10s\n",
+				deviceIDStr, serialno, model, status, tunnelInfo)
+		}
 	}
 
+	return nil
+}
+
+// GetMappingsQuiet 静默获取当前端口映射
+func GetMappingsQuiet() map[int][]int {
+	result := make(map[int][]int)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(LocalServerURL+"/api/mappings", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return result
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Mappings []struct {
+			DeviceID  int `json:"deviceId"`
+			LocalPort int `json:"localPort"`
+		} `json:"mappings"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return result
+	}
+
+	for _, m := range data.Mappings {
+		result[m.DeviceID] = append(result[m.DeviceID], m.LocalPort)
+	}
+
+	return result
+}
+
+// GetMappings 获取当前端口映射列表
+func GetMappings() error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(LocalServerURL+"/api/mappings", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Mappings []struct {
+			DeviceID  int `json:"deviceId"`
+			LocalPort int `json:"localPort"`
+			PhonePort int `json:"phonePort"`
+		} `json:"mappings"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	if len(data.Mappings) == 0 {
+		fmt.Println("当前无活跃的端口映射")
+		return nil
+	}
+
+	fmt.Printf("%-12s %-12s %-12s\n", "设备ID", "本地端口", "远程端口")
+	fmt.Println(strings.Repeat("-", 40))
+
+	for _, m := range data.Mappings {
+		fmt.Printf("%-12d %-12d %-12d\n", m.DeviceID, m.LocalPort, m.PhonePort)
+	}
+
+	return nil
+}
+
+// Connect 建立端口映射（隧道）
+func Connect(platformURL, apiKey string, deviceID, localPort, phonePort int) error {
+	// 先登录
+	if err := EnsureLogin(platformURL, apiKey); err != nil {
+		return fmt.Errorf("登录失败: %v", err)
+	}
+
+	reqBody := map[string]interface{}{
+		"key":       apiKey,
+		"deviceId":  deviceID,
+		"localPort": localPort,
+		"phonePort": phonePort,
+	}
+
+	jsonData, _ := json.Marshal(reqBody)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(LocalServerURL+"/api/connect", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("映射失败: %s", result.Message)
+	}
+
+	fmt.Printf("✓ 端口映射建立成功: 本地 %d -> 设备 %d 端口 %d\n", localPort, deviceID, phonePort)
+	return nil
+}
+
+// Disconnect 断开端口映射
+func Disconnect(apiKey string, localPort int) error {
+	reqBody := map[string]interface{}{
+		"key":       apiKey,
+		"localPort": localPort,
+	}
+
+	jsonData, _ := json.Marshal(reqBody)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(LocalServerURL+"/api/disconnect", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("断开失败: %s", result.Message)
+	}
+
+	fmt.Printf("✓ 已断开本地端口 %d 的映射\n", localPort)
 	return nil
 }
 

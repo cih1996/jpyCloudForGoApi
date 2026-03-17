@@ -190,3 +190,22 @@ type RpaLog struct {
 func (RpaLog) TableName() string {
 	return "rpa_log"
 }
+
+// ========== 代码仓库表 ==========
+
+// ScriptRepo 代码仓库
+type ScriptRepo struct {
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	Name        string `gorm:"type:varchar(100);not null" json:"name"`
+	Description string `gorm:"type:varchar(500)" json:"description"`
+	Code        string `gorm:"type:text;not null" json:"code"`
+	Timeout     int    `gorm:"default:30000" json:"timeout"` // 超时时间（毫秒），0=无限
+
+	// 时间
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"createdAt"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updatedAt"`
+}
+
+func (ScriptRepo) TableName() string {
+	return "script_repo"
+}

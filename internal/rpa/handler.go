@@ -44,6 +44,13 @@ func RegisterRoutes(r *gin.RouterGroup) {
 
 		// 脚本反馈接口
 		rpa.POST("/devices/:deviceId/feedback", updateFeedback)
+
+		// 代码仓库
+		rpa.GET("/scripts", listScripts)
+		rpa.GET("/scripts/:id", getScript)
+		rpa.POST("/scripts", createScript)
+		rpa.PUT("/scripts/:id", updateScript)
+		rpa.DELETE("/scripts/:id", deleteScript)
 	}
 }
 
@@ -282,4 +289,77 @@ func updateFeedback(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
+}
+
+// ========== 代码仓库 ==========
+
+func listScripts(c *gin.Context) {
+	keyword := c.Query("keyword")
+	var scripts []database.ScriptRepo
+	var err error
+	if keyword != "" {
+		scripts, err = database.SearchScripts(keyword)
+	} else {
+		scripts, err = database.GetAllScripts()
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": scripts})
+}
+
+func getScript(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	script, err := database.GetScript(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if script == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "脚本不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": script})
+}
+
+func createScript(c *gin.Context) {
+	var script database.ScriptRepo
+	if err := c.ShouldBindJSON(&script); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if script.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "脚本名称不能为空"})
+		return
+	}
+	if err := database.CreateScript(&script); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": script})
+}
+
+func updateScript(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	var script database.ScriptRepo
+	if err := c.ShouldBindJSON(&script); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	script.ID = uint(id)
+	if err := database.UpdateScript(&script); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": script})
+}
+
+func deleteScript(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err := database.DeleteScript(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }

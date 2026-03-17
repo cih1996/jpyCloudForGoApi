@@ -39,7 +39,7 @@ func main() {
 	}()
 
 	// 1. 初始化 AdminApi 并登录 (通过 service.EnsureLogin)
-	if err := service.EnsureLogin(PlatformKey); err != nil {
+	if err := service.EnsureLogin(PlatformKey, ""); err != nil {
 		logs.Error("Login failed: %v", err)
 		return
 	}

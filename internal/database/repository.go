@@ -333,3 +333,55 @@ func ClearOldLogs(days int) error {
 	cutoff := time.Now().AddDate(0, 0, -days)
 	return db.Where("created_at < ?", cutoff).Delete(&RpaLog{}).Error
 }
+
+// ========== ScriptRepo 操作 ==========
+
+// CreateScript 创建脚本
+func CreateScript(script *ScriptRepo) error {
+	return db.Create(script).Error
+}
+
+// GetScript 获取脚本
+func GetScript(id uint) (*ScriptRepo, error) {
+	var script ScriptRepo
+	err := db.First(&script, id).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &script, err
+}
+
+// UpdateScript 更新脚本（只更新指定字段，保留 createdAt，返回完整数据）
+func UpdateScript(script *ScriptRepo) error {
+	err := db.Model(&ScriptRepo{}).Where("id = ?", script.ID).Updates(map[string]interface{}{
+		"name":        script.Name,
+		"description": script.Description,
+		"code":        script.Code,
+		"timeout":     script.Timeout,
+	}).Error
+	if err != nil {
+		return err
+	}
+	// 重新查询完整数据
+	return db.First(script, script.ID).Error
+}
+
+// DeleteScript 删除脚本
+func DeleteScript(id uint) error {
+	return db.Delete(&ScriptRepo{}, id).Error
+}
+
+// GetAllScripts 获取所有脚本
+func GetAllScripts() ([]ScriptRepo, error) {
+	var scripts []ScriptRepo
+	err := db.Order("updated_at DESC").Find(&scripts).Error
+	return scripts, err
+}
+
+// SearchScripts 搜索脚本
+func SearchScripts(keyword string) ([]ScriptRepo, error) {
+	var scripts []ScriptRepo
+	err := db.Where("name LIKE ? OR description LIKE ?", "%"+keyword+"%", "%"+keyword+"%").
+		Order("updated_at DESC").Find(&scripts).Error
+	return scripts, err
+}

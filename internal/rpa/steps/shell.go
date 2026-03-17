@@ -43,7 +43,7 @@ func (s *ShellStep) Execute(deviceID int, params map[string]interface{}, subStep
 		Type: "execShell",
 		Seq:  int(time.Now().Unix()),
 		Data: map[string]interface{}{
-			"deviceId": deviceID,
+			"deviceId": float64(deviceID),
 			"shell":    command,
 		},
 	}

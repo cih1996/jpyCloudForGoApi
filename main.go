@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.1"
+const VERSION = "1.0.2"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -50,6 +50,12 @@ func main() {
 		handleScreenshot()
 	case "logs", "log":
 		handleLogs()
+	case "tunnel", "connect":
+		handleTunnel()
+	case "disconnect":
+		handleDisconnect()
+	case "mappings", "mapping":
+		handleMappings()
 	case "version", "-v", "--version":
 		fmt.Printf("jpy-server version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "--help":
@@ -83,9 +89,14 @@ JPY Server v%s - 集控平台本地代理
   service restart          重启服务
 
 设备命令（需要 -s 和 -k 参数，本地服务必须已启动）:
-  devices -s <集控平台> -k <密钥>              获取设备列表
-  shell -s <集控平台> -k <密钥> <设备ID> <命令>  执行 Shell 命令
-  screenshot -s <集控平台> -k <密钥> <设备ID>   截图
+  devices -s <集控平台> -k <密钥> [-v]           获取设备列表（-v 显示详细信息）
+  shell -s <集控平台> -k <密钥> <设备ID> <命令>   执行 Shell 命令
+  screenshot -s <集控平台> -k <密钥> <设备ID>    截图
+
+隧道命令（端口映射/打洞）:
+  tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口>  建立端口映射
+  disconnect -k <密钥> <本地端口>                              断开端口映射
+  mappings                                                    查看当前所有端口映射
 
 日志命令:
   logs                     查看日志文件路径
@@ -99,6 +110,7 @@ JPY Server v%s - 集控平台本地代理
 参数说明:
   -s, --server    集控平台地址（如 https://114.67.244.162）
   -k, --key       集控平台 API 密钥
+  -v, --verbose   显示详细信息
 
 工作原理:
   CLI 命令通过本地后端服务（127.0.0.1:1001）转发到集控平台。
@@ -238,15 +250,24 @@ func handleService() {
 }
 
 func handleDevices() {
-	server, key, _ := parseServerKey(os.Args[2:])
+	server, key, remaining := parseServerKey(os.Args[2:])
 
 	if server == "" {
 		fmt.Println("错误: 缺少服务器地址")
-		fmt.Println("用法: jpy-server devices -s <服务器> -k <密钥>")
+		fmt.Println("用法: jpy-server devices -s <服务器> -k <密钥> [-v]")
 		os.Exit(1)
 	}
 
-	if err := cli.GetDevices(server, key); err != nil {
+	// 检查是否有 -v 参数
+	verbose := false
+	for _, arg := range remaining {
+		if arg == "-v" || arg == "--verbose" {
+			verbose = true
+			break
+		}
+	}
+
+	if err := cli.GetDevices(server, key, verbose); err != nil {
 		fmt.Printf("获取设备失败: %v\n", err)
 		os.Exit(1)
 	}
@@ -350,6 +371,73 @@ func handleLogs() {
 	} else {
 		// 查看最近 N 行
 		cli.TailLines(stdoutLog, lines)
+	}
+}
+
+func handleTunnel() {
+	server, key, remaining := parseServerKey(os.Args[2:])
+
+	if server == "" || key == "" {
+		fmt.Println("错误: 缺少服务器地址或密钥")
+		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口>")
+		os.Exit(1)
+	}
+
+	if len(remaining) < 3 {
+		fmt.Println("错误: 缺少参数")
+		fmt.Println("用法: jpy-server tunnel -s <集控平台> -k <密钥> <设备ID> <本地端口> <远程端口>")
+		os.Exit(1)
+	}
+
+	var deviceID, localPort, phonePort int
+	fmt.Sscanf(remaining[0], "%d", &deviceID)
+	fmt.Sscanf(remaining[1], "%d", &localPort)
+	fmt.Sscanf(remaining[2], "%d", &phonePort)
+
+	if deviceID == 0 || localPort == 0 || phonePort == 0 {
+		fmt.Println("错误: 无效的设备ID或端口号")
+		os.Exit(1)
+	}
+
+	if err := cli.Connect(server, key, deviceID, localPort, phonePort); err != nil {
+		fmt.Printf("建立隧道失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleDisconnect() {
+	_, key, remaining := parseServerKey(os.Args[2:])
+
+	if key == "" {
+		fmt.Println("错误: 缺少密钥")
+		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口>")
+		os.Exit(1)
+	}
+
+	if len(remaining) < 1 {
+		fmt.Println("错误: 缺少本地端口")
+		fmt.Println("用法: jpy-server disconnect -k <密钥> <本地端口>")
+		os.Exit(1)
+	}
+
+	var localPort int
+	fmt.Sscanf(remaining[0], "%d", &localPort)
+
+	if localPort == 0 {
+		fmt.Println("错误: 无效的端口号")
+		os.Exit(1)
+	}
+
+	if err := cli.Disconnect(key, localPort); err != nil {
+		fmt.Printf("断开隧道失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func handleMappings() {
+	if err := cli.GetMappings(); err != nil {
+		fmt.Printf("获取映射列表失败: %v\n", err)
+		os.Exit(1)
 	}
 }
 

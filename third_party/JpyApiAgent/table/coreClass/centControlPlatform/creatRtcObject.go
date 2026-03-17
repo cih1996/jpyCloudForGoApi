@@ -30,21 +30,33 @@ func (c *Core) CreatMiddlewareRtc(MiddlewareId uint64, parOpen NetClient.Connect
 			pkt.Devices = append(pkt.Devices, device)
 		}
 	}
-	middleWare, err := middleAgentRtc.New(&pkt)
+	middleWare, isNew, err := middleAgentRtc.New(&pkt)
 	if err != nil {
 		logs.Error("创建中间件[%d]对象失败%v", MiddlewareId, err)
 		return nil, errors.New(fmt.Sprintf("创建中间件[%d]对象失败%v", MiddlewareId, err))
 	}
 
-	var err1 *ErrPkg.Err
-	middleWare.TokenInfo, err1 = middleWare.GetToken(middleWare.MiddlewareId)
-	if err1 != nil {
-		logs.Error("创建中间件[%d]对象失败%v", MiddlewareId, err1)
-		return nil, errors.New(fmt.Sprintf("创建中间件[%d]对象失败%v", MiddlewareId, err1))
+	// 新建的对象需要获取 token 和连接
+	// 复用的对象如果连接断开（Code <= 0 或 Rtc 为 nil），也需要重新连接
+	needConnect := isNew || middleWare.Rtc == nil || middleWare.Code <= 0
+	if needConnect {
+		if !isNew {
+			logs.Info("中间件[%d]连接已断开(Code=%d)，重新建立连接", MiddlewareId, middleWare.Code)
+		}
+		var err1 *ErrPkg.Err
+		middleWare.TokenInfo, err1 = middleWare.GetToken(middleWare.MiddlewareId)
+		if err1 != nil {
+			logs.Error("创建中间件[%d]对象失败%v", MiddlewareId, err1)
+			// 检查是否是服务端 session 断开（code=-1001）
+			if err1.Code == -1001 {
+				return nil, errors.New(fmt.Sprintf("SESSION_EXPIRED:创建中间件[%d]对象失败%v", MiddlewareId, err1))
+			}
+			return nil, errors.New(fmt.Sprintf("创建中间件[%d]对象失败%v", MiddlewareId, err1))
+		}
+		middleWare.Connect()
+		//保存中间件对象
+		c.saveMiddleAgent(MiddlewareId, middleWare)
 	}
-	middleWare.Connect()
-	//保存中间件对象
-	c.saveMiddleAgent(MiddlewareId, middleWare)
 	return middleWare, nil
 }
 

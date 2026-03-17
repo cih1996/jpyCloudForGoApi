@@ -279,14 +279,62 @@ func (e *Engine) handleStepResult(config *database.DeviceRpaConfig, flow *databa
 			logger.LogInfo("[RPA Engine] 设备 %d 步骤 %d (%s) 完成", config.DeviceID, config.CurrentStep, step.Name)
 			database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogSuccess, fmt.Sprintf("步骤完成: %s", step.Name), "")
 
-			// 保存步骤输出到流程变量
+			// 保存步骤输出到流程变量（排除控制指令）
 			if result.Output != nil && len(result.Output) > 0 {
-				database.MergeFlowVariables(config.DeviceID, result.Output)
-				logger.LogInfo("[RPA Engine] 设备 %d 保存步骤输出: %v", config.DeviceID, result.Output)
+				// 复制输出，排除控制指令
+				outputToSave := make(map[string]interface{})
+				for k, v := range result.Output {
+					if k != "skipNext" && k != "jumpToStep" && k != "stopFlow" && k != "stopSuccess" {
+						outputToSave[k] = v
+					}
+				}
+				if len(outputToSave) > 0 {
+					database.MergeFlowVariables(config.DeviceID, outputToSave)
+					logger.LogInfo("[RPA Engine] 设备 %d 保存步骤输出: %v", config.DeviceID, outputToSave)
+				}
+			}
+
+			// 处理条件判断步骤的特殊控制指令
+			nextStep := config.CurrentStep + 1
+
+			if result.Output != nil {
+				// 检查是否需要停止流程
+				if stopFlow, ok := result.Output["stopFlow"].(bool); ok && stopFlow {
+					if stopSuccess, ok := result.Output["stopSuccess"].(bool); ok && stopSuccess {
+						// 成功停止
+						database.SetDeviceCompleted(config.DeviceID)
+						logger.LogInfo("[RPA Engine] 设备 %d 条件判断触发成功停止", config.DeviceID)
+						database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogSuccess, "条件判断触发流程成功停止", "")
+						e.notifyProgress(config.DeviceID, flow, len(flow.Steps), 0, "")
+						return
+					}
+				}
+
+				// 检查是否需要跳转到指定步骤
+				if jumpTo, ok := result.Output["jumpToStep"].(int); ok {
+					if jumpTo >= 0 && jumpTo < len(flow.Steps) {
+						nextStep = jumpTo
+						logger.LogInfo("[RPA Engine] 设备 %d 条件判断跳转到步骤 %d", config.DeviceID, jumpTo)
+						database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogInfo, fmt.Sprintf("条件判断跳转到步骤 %d", jumpTo), "")
+					}
+				} else if jumpToFloat, ok := result.Output["jumpToStep"].(float64); ok {
+					jumpTo := int(jumpToFloat)
+					if jumpTo >= 0 && jumpTo < len(flow.Steps) {
+						nextStep = jumpTo
+						logger.LogInfo("[RPA Engine] 设备 %d 条件判断跳转到步骤 %d", config.DeviceID, jumpTo)
+						database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogInfo, fmt.Sprintf("条件判断跳转到步骤 %d", jumpTo), "")
+					}
+				}
+
+				// 检查是否需要跳过下一步
+				if skipNext, ok := result.Output["skipNext"].(bool); ok && skipNext {
+					nextStep = config.CurrentStep + 2
+					logger.LogInfo("[RPA Engine] 设备 %d 条件判断跳过下一步", config.DeviceID)
+					database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogInfo, "条件判断跳过下一步", "")
+				}
 			}
 
 			// 更新进度到下一步
-			nextStep := config.CurrentStep + 1
 			database.UpdateDeviceProgress(config.DeviceID, nextStep, 0, make(database.StepContext))
 
 			// 通知进度

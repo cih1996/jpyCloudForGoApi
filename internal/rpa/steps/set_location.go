@@ -58,7 +58,7 @@ func (s *SetLocationStep) Execute(deviceID int, params map[string]interface{}, s
 		Seq:  int(time.Now().Unix()),
 		Data: []map[string]interface{}{
 			{
-				"deviceId": deviceID,
+				"deviceId": float64(deviceID),
 				"lat":      lat,
 				"lng":      lng,
 			},

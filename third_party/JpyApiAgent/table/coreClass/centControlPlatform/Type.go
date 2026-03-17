@@ -114,6 +114,35 @@ func (c *Core) DeleteAllMiddleAgents() {
 	})
 }
 
+// Reset 重置 Core 状态（用于强制重新登录）
+func (c *Core) Reset() {
+	logs.Info("[Core.Reset] 开始重置 Core 状态...")
+	// 关闭旧的 session 连接
+	if c.server.session != nil {
+		logs.Info("[Core.Reset] 关闭旧的 session 连接...")
+		c.server.session.Close("forceRelogin")
+		c.server.session = nil
+		c.server.api = nil
+	}
+	// 清理 token，强制下次登录使用 apiKey
+	c.token = ""
+	// 清理设备列表
+	c.Devices.Range(func(key, value any) bool {
+		c.Devices.Delete(key)
+		return true
+	})
+	// 清理中间件列表
+	c.DeleteAllMiddleAgents()
+	// 清理中间件 ID 列表
+	c.deleteAllMiddleWareIds()
+	// 清理端口映射列表
+	c.PortMaps.Range(func(key, value any) bool {
+		c.PortMaps.Delete(key)
+		return true
+	})
+	logs.Info("[Core.Reset] Core 状态已重置")
+}
+
 // deleteAllMiddleWareIds 删除所有中间件id 内部使用
 func (c *Core) deleteAllMiddleWareIds() {
 	c.middleWareId.Range(func(key, value any) bool {

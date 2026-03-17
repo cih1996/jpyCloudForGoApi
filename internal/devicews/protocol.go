@@ -176,6 +176,7 @@ type TaskPushPayload struct {
 	Timeout    int64                    `json:"timeout"`
 	Priority   int                      `json:"priority"`
 	Resources  []map[string]interface{} `json:"resources,omitempty"`
+	Variables  map[string]interface{}   `json:"variables,omitempty"` // 流程变量，脚本中通过 context.variables 访问
 }
 
 // CommandPayload 命令的 payload 结构

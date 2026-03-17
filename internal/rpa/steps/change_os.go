@@ -75,7 +75,7 @@ func (s *ChangeOsAndWaitStep) sendChangeOs(deviceID int, params map[string]inter
 
 	// 构建 Changephones 请求数据
 	changeData := map[string]interface{}{
-		"deviceId": deviceID,
+		"deviceId": float64(deviceID),
 		"msisdn":   msisdn,
 		"smsc":     smsc,
 	}
