@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// 本地后端服务地址
+const LocalServerURL = "http://127.0.0.1:1001"
+
 // UnifiedRequest 统一 API 请求结构
 type UnifiedRequest struct {
 	Type  string      `json:"type"`
@@ -30,14 +33,19 @@ type UnifiedResponse struct {
 	Data interface{} `json:"data"`
 }
 
-// CallUnified 调用统一 API
-func CallUnified(serverURL, apiKey, reqType string, data interface{}) (*UnifiedResponse, error) {
-	url := strings.TrimRight(serverURL, "/") + "/api/unified"
+// CallUnified 调用本地后端的统一 API
+// platformURL: 集控平台地址（用于登录）
+// apiKey: 集控平台 API 密钥
+// reqType: 请求类型
+// data: 请求数据
+func CallUnified(platformURL, apiKey, reqType string, data interface{}) (*UnifiedResponse, error) {
+	url := LocalServerURL + "/api/unified"
 
 	reqBody := UnifiedRequest{
 		Type:  reqType,
 		Seq:   time.Now().UnixMilli(),
 		Token: apiKey,
+		Host:  platformURL, // 集控平台地址
 		Data:  data,
 	}
 
@@ -49,7 +57,7 @@ func CallUnified(serverURL, apiKey, reqType string, data interface{}) (*UnifiedR
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("请求失败: %v", err)
+		return nil, fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -70,21 +78,21 @@ func CallUnified(serverURL, apiKey, reqType string, data interface{}) (*UnifiedR
 	return &result, nil
 }
 
-// EnsureLogin 确保已登录
-func EnsureLogin(serverURL, apiKey string) error {
-	_, err := CallUnified(serverURL, apiKey, "Login", nil)
+// EnsureLogin 确保已登录集控平台
+func EnsureLogin(platformURL, apiKey string) error {
+	_, err := CallUnified(platformURL, apiKey, "Login", nil)
 	return err
 }
 
 // GetDevices 获取设备列表
-func GetDevices(serverURL, apiKey string) error {
+func GetDevices(platformURL, apiKey string) error {
 	// 先登录
-	if err := EnsureLogin(serverURL, apiKey); err != nil {
+	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
 	}
 
 	// 获取设备列表
-	result, err := CallUnified(serverURL, apiKey, "GetDeviceList", nil)
+	result, err := CallUnified(platformURL, apiKey, "GetDeviceList", nil)
 	if err != nil {
 		return err
 	}
@@ -96,19 +104,31 @@ func GetDevices(serverURL, apiKey string) error {
 		return nil
 	}
 
-	devices, ok := dataMap["list"].([]interface{})
+	// 尝试 records 字段（集控平台返回格式）
+	devices, ok := dataMap["records"].([]interface{})
 	if !ok || len(devices) == 0 {
-		fmt.Println("暂无设备")
-		return nil
+		// 兼容 list 字段
+		devices, ok = dataMap["list"].([]interface{})
+		if !ok || len(devices) == 0 {
+			fmt.Println("暂无设备")
+			return nil
+		}
 	}
 
 	fmt.Printf("%-12s %-20s %-15s %-10s\n", "设备ID", "序列号", "型号", "状态")
 	fmt.Println(strings.Repeat("-", 60))
 
 	for _, d := range devices {
-		dev, ok := d.(map[string]interface{})
+		record, ok := d.(map[string]interface{})
 		if !ok {
 			continue
+		}
+
+		// 设备信息在 deviceInfo 字段中
+		dev, ok := record["deviceInfo"].(map[string]interface{})
+		if !ok {
+			// 兼容直接返回设备信息的格式
+			dev = record
 		}
 
 		deviceID := ""
@@ -117,19 +137,17 @@ func GetDevices(serverURL, apiKey string) error {
 		}
 
 		serialno := ""
-		if s, ok := dev["serialno"].(string); ok {
+		if s, ok := dev["uuid"].(string); ok {
 			serialno = s
 		}
 
 		model := ""
-		if m, ok := dev["model"].(string); ok {
+		if m, ok := dev["brand"].(string); ok {
 			model = m
 		}
 
 		status := "离线"
 		if online, ok := dev["online"].(bool); ok && online {
-			status = "在线"
-		} else if state, ok := dev["state"].(float64); ok && state > 0 {
 			status = "在线"
 		}
 
@@ -140,9 +158,9 @@ func GetDevices(serverURL, apiKey string) error {
 }
 
 // ExecuteShell 执行 Shell 命令
-func ExecuteShell(serverURL, apiKey, deviceID, command string) error {
+func ExecuteShell(platformURL, apiKey, deviceID, command string) error {
 	// 先登录
-	if err := EnsureLogin(serverURL, apiKey); err != nil {
+	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
 	}
 
@@ -151,7 +169,7 @@ func ExecuteShell(serverURL, apiKey, deviceID, command string) error {
 	fmt.Sscanf(deviceID, "%d", &devID)
 
 	// 执行 Shell
-	result, err := CallUnified(serverURL, apiKey, "execShell", map[string]interface{}{
+	result, err := CallUnified(platformURL, apiKey, "execShell", map[string]interface{}{
 		"deviceId": devID,
 		"shell":    command,
 	})
@@ -171,9 +189,9 @@ func ExecuteShell(serverURL, apiKey, deviceID, command string) error {
 }
 
 // Screenshot 截图（通过集控平台）
-func Screenshot(serverURL, apiKey, deviceID, output string) error {
+func Screenshot(platformURL, apiKey, deviceID, output string) error {
 	// 先登录
-	if err := EnsureLogin(serverURL, apiKey); err != nil {
+	if err := EnsureLogin(platformURL, apiKey); err != nil {
 		return fmt.Errorf("登录失败: %v", err)
 	}
 
@@ -182,7 +200,7 @@ func Screenshot(serverURL, apiKey, deviceID, output string) error {
 	fmt.Sscanf(deviceID, "%d", &devID)
 
 	// 请求截图
-	result, err := CallUnified(serverURL, apiKey, "screenshot", map[string]interface{}{
+	result, err := CallUnified(platformURL, apiKey, "screenshot", map[string]interface{}{
 		"deviceId": devID,
 	})
 	if err != nil {
@@ -535,4 +553,20 @@ func runCommand(name string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// TailFollow 实时查看日志（类似 tail -f）
+func TailFollow(logPath string) {
+	cmd := exec.Command("tail", "-f", logPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
+}
+
+// TailLines 查看最近 N 行日志
+func TailLines(logPath string, lines int) {
+	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
 }

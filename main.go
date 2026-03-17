@@ -48,6 +48,8 @@ func main() {
 		handleShell()
 	case "screenshot", "ss":
 		handleScreenshot()
+	case "logs", "log":
+		handleLogs()
 	case "version", "-v", "--version":
 		fmt.Printf("jpy-server version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "--help":
@@ -80,35 +82,44 @@ JPY Server v%s - 集控平台本地代理
   service status           查看服务状态
   service restart          重启服务
 
-设备命令（需要 -s 和 -k 参数）:
-  devices -s <服务器> -k <密钥>              获取设备列表
-  shell -s <服务器> -k <密钥> <设备ID> <命令>  执行 Shell 命令
-  screenshot -s <服务器> -k <密钥> <设备ID>   截图
+设备命令（需要 -s 和 -k 参数，本地服务必须已启动）:
+  devices -s <集控平台> -k <密钥>              获取设备列表
+  shell -s <集控平台> -k <密钥> <设备ID> <命令>  执行 Shell 命令
+  screenshot -s <集控平台> -k <密钥> <设备ID>   截图
+
+日志命令:
+  logs                     查看日志文件路径
+  logs -f                  实时查看日志（tail -f）
+  logs -n <行数>           查看最近 N 行日志
 
 其他:
   version                  显示版本
   help                     显示帮助
 
 参数说明:
-  -s, --server    服务器地址（如 https://example.com）
-  -k, --key       API 密钥
+  -s, --server    集控平台地址（如 https://114.67.244.162）
+  -k, --key       集控平台 API 密钥
+
+工作原理:
+  CLI 命令通过本地后端服务（127.0.0.1:1001）转发到集控平台。
+  使用设备命令前，请确保本地服务已启动：jpy-server service start
 
 示例:
   # 安装程序
-  ./jpy-server install
+  sudo ./jpy-server install
 
   # 安装并启动服务
   jpy-server service install
   jpy-server service start
 
   # 获取设备列表
-  jpy-server devices -s https://example.com -k your-api-key
+  jpy-server devices -s https://114.67.244.162 -k your-api-key
 
   # 执行 Shell 命令
-  jpy-server shell -s https://example.com -k your-api-key 12345678 "ls -la"
+  jpy-server shell -s https://114.67.244.162 -k your-api-key 12345678 "ls -la"
 
-  # 升级程序
-  ./jpy-server-new upgrade
+  # 查看日志
+  jpy-server logs -f
 `, VERSION)
 }
 
@@ -289,6 +300,56 @@ func handleScreenshot() {
 	if err := cli.Screenshot(server, key, deviceID, output); err != nil {
 		fmt.Printf("截图失败: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func handleLogs() {
+	dataDir := cli.GetDataDir()
+	stdoutLog := filepath.Join(dataDir, "stdout.log")
+	stderrLog := filepath.Join(dataDir, "stderr.log")
+
+	// 解析参数
+	follow := false
+	lines := 50
+
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "-f", "--follow":
+			follow = true
+		case "-n", "--lines":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &lines)
+				i++
+			}
+		}
+	}
+
+	// 如果没有参数，显示日志路径
+	if len(os.Args) == 2 {
+		fmt.Println("日志文件路径:")
+		fmt.Printf("  标准输出: %s\n", stdoutLog)
+		fmt.Printf("  错误输出: %s\n", stderrLog)
+		fmt.Println("\n使用方法:")
+		fmt.Println("  jpy-server logs -f        实时查看日志")
+		fmt.Println("  jpy-server logs -n 100    查看最近 100 行")
+		return
+	}
+
+	// 检查日志文件是否存在
+	if _, err := os.Stat(stdoutLog); os.IsNotExist(err) {
+		fmt.Printf("日志文件不存在: %s\n", stdoutLog)
+		fmt.Println("服务可能尚未启动过")
+		return
+	}
+
+	if follow {
+		// 实时查看日志
+		fmt.Printf("实时查看日志: %s\n", stdoutLog)
+		fmt.Println("按 Ctrl+C 退出\n")
+		cli.TailFollow(stdoutLog)
+	} else {
+		// 查看最近 N 行
+		cli.TailLines(stdoutLog, lines)
 	}
 }
 

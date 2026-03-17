@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"port-mapping-demo/internal/config"
+	"port-mapping-demo/internal/devicews"
 	"port-mapping-demo/internal/manager"
 	"port-mapping-demo/internal/model"
+	"port-mapping-demo/third_party/JpyApiAgent/table/coreClass/middleAgentRtc"
 	"sync"
 	"time"
 
@@ -21,7 +23,20 @@ var (
 	currentKey  string
 	currentHost string // 当前连接的服务器地址
 	loginLock   sync.Mutex
+
+	// deviceWSServer 设备 WebSocket 服务器
+	deviceWSServer *devicews.Server
 )
+
+// SetDeviceWSServer 设置设备 WebSocket 服务器
+func SetDeviceWSServer(server *devicews.Server) {
+	deviceWSServer = server
+}
+
+// GetDeviceWSServer 获取设备 WebSocket 服务器
+func GetDeviceWSServer() *devicews.Server {
+	return deviceWSServer
+}
 
 // EnsureLogin 确保已登录集控平台
 // 使用 JpyApiAgent 的 NewCore + Login + CenterGetDeviceList 替代旧的手动 WS 连接
@@ -34,18 +49,27 @@ func EnsureLogin(key string, host string) error {
 		return fmt.Errorf("secret key is required")
 	}
 
+	logs.Info("[EnsureLogin] 开始登录, host=%s, currentHost=%s, currentKey=%s", host, currentHost, currentKey)
+
 	// 如果传入了新的 host，先更新配置
 	if host != "" {
 		// 清理 host：去掉协议前缀和路径后缀
 		cleanHost := host
 		if len(cleanHost) > 0 {
+			// 去掉 https:// 前缀
+			if len(cleanHost) > 8 && cleanHost[:8] == "https://" {
+				cleanHost = cleanHost[8:]
+			}
+			// 去掉 http:// 前缀
+			if len(cleanHost) > 7 && cleanHost[:7] == "http://" {
+				cleanHost = cleanHost[7:]
+			}
 			// 去掉 wss:// 或 ws:// 前缀
-			if len(cleanHost) > 6 && (cleanHost[:6] == "wss://" || cleanHost[:5] == "ws://") {
-				if cleanHost[:6] == "wss://" {
-					cleanHost = cleanHost[6:]
-				} else {
-					cleanHost = cleanHost[5:]
-				}
+			if len(cleanHost) > 6 && cleanHost[:6] == "wss://" {
+				cleanHost = cleanHost[6:]
+			}
+			if len(cleanHost) > 5 && cleanHost[:5] == "ws://" {
+				cleanHost = cleanHost[5:]
 			}
 			// 去掉 /ws 后缀
 			if len(cleanHost) > 3 && cleanHost[len(cleanHost)-3:] == "/ws" {
@@ -58,10 +82,11 @@ func EnsureLogin(key string, host string) error {
 		}
 
 		newWsUrl := "wss://" + cleanHost + "/ws"
+		logs.Info("[EnsureLogin] cleanHost=%s, newWsUrl=%s, configWsUrl=%s", cleanHost, newWsUrl, config.GetWsUrl())
 
 		// 检查地址是否变化
 		if newWsUrl != config.GetWsUrl() || cleanHost != currentHost {
-			logs.Info("服务器地址变更: %s -> %s", config.GetWsUrl(), newWsUrl)
+			logs.Info("[EnsureLogin] 服务器地址变更: %s -> %s", config.GetWsUrl(), newWsUrl)
 			if err := config.SetWsUrl(newWsUrl); err != nil {
 				logs.Error("保存配置失败: %v", err)
 			}
@@ -72,8 +97,8 @@ func EnsureLogin(key string, host string) error {
 		}
 	}
 
-	// 已登录且 key 未变，直接返回
-	if key == currentKey && jpyCore != nil && jpyCore.GetApi() != nil {
+	// 已登录且 key 和 host 都未变，直接返回
+	if key == currentKey && currentHost != "" && jpyCore != nil && jpyCore.GetApi() != nil {
 		return nil
 	}
 
@@ -120,11 +145,23 @@ func forceRelogin(key string) error {
 	if key == "" {
 		return fmt.Errorf("secret key is required")
 	}
+	logs.Info("[forceRelogin] 开始强制重新登录...")
+
+	// 清理所有中间件对象（它们持有旧 session 的引用）
+	middleAgentRtc.ClearAll()
+
+	// 重置 Core 状态（清理 token、设备列表等）
+	if jpyCore != nil {
+		jpyCore.Reset()
+	}
+
 	loginLock.Lock()
 	currentKey = ""
 	currentHost = ""
 	jpyCore = nil
 	loginLock.Unlock()
+
+	logs.Info("[forceRelogin] 已清理旧状态，开始重新登录...")
 	return EnsureLogin(key, "")
 }
 
@@ -147,6 +184,13 @@ func GetCurrentKey() string {
 	loginLock.Lock()
 	defer loginLock.Unlock()
 	return currentKey
+}
+
+// GetCurrentHost 返回当前登录的 host（供调试使用）
+func GetCurrentHost() string {
+	loginLock.Lock()
+	defer loginLock.Unlock()
+	return currentHost
 }
 
 // GetDevices 获取设备列表
