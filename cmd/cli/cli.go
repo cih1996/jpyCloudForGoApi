@@ -957,16 +957,32 @@ func runCommand(name string, args ...string) error {
 
 // TailFollow 实时查看日志（类似 tail -f）
 func TailFollow(logPath string) {
-	cmd := exec.Command("tail", "-f", logPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Run()
+	if runtime.GOOS == "windows" {
+		// Windows 使用 PowerShell 的 Get-Content -Wait
+		cmd := exec.Command("powershell", "-Command", fmt.Sprintf("Get-Content -Path '%s' -Wait -Tail 50", logPath))
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	} else {
+		cmd := exec.Command("tail", "-f", logPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	}
 }
 
 // TailLines 查看最近 N 行日志
 func TailLines(logPath string, lines int) {
-	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Run()
+	if runtime.GOOS == "windows" {
+		// Windows 使用 PowerShell 的 Get-Content -Tail
+		cmd := exec.Command("powershell", "-Command", fmt.Sprintf("Get-Content -Path '%s' -Tail %d", logPath, lines))
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	} else {
+		cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	}
 }

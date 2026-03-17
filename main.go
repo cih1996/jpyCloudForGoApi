@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.5"
+const VERSION = "1.0.6"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -354,9 +354,15 @@ func handleScreenshot() {
 }
 
 func handleLogs() {
+	// 日志可能在多个位置
+	// 1. 服务模式：~/.jpy-cloud/stdout.log
+	// 2. 直接运行：./logs/system.log 或 ./logs/unified_service.log
 	dataDir := cli.GetDataDir()
-	stdoutLog := filepath.Join(dataDir, "stdout.log")
-	stderrLog := filepath.Join(dataDir, "stderr.log")
+	possibleLogs := []string{
+		filepath.Join(dataDir, "stdout.log"),           // 系统服务日志
+		"logs/system.log",                               // 直接运行时的日志
+		"logs/unified_service.log",                      // 统一服务日志
+	}
 
 	// 解析参数
 	follow := false
@@ -377,29 +383,46 @@ func handleLogs() {
 	// 如果没有参数，显示日志路径
 	if len(os.Args) == 2 {
 		fmt.Println("日志文件路径:")
-		fmt.Printf("  标准输出: %s\n", stdoutLog)
-		fmt.Printf("  错误输出: %s\n", stderrLog)
+		for _, logPath := range possibleLogs {
+			if _, err := os.Stat(logPath); err == nil {
+				fmt.Printf("  ✓ %s (存在)\n", logPath)
+			} else {
+				fmt.Printf("  - %s (不存在)\n", logPath)
+			}
+		}
 		fmt.Println("\n使用方法:")
 		fmt.Println("  jpy-cloud logs -f        实时查看日志")
 		fmt.Println("  jpy-cloud logs -n 100    查看最近 100 行")
 		return
 	}
 
-	// 检查日志文件是否存在
-	if _, err := os.Stat(stdoutLog); os.IsNotExist(err) {
-		fmt.Printf("日志文件不存在: %s\n", stdoutLog)
-		fmt.Println("服务可能尚未启动过")
+	// 查找存在的日志文件
+	var logFile string
+	for _, logPath := range possibleLogs {
+		if _, err := os.Stat(logPath); err == nil {
+			logFile = logPath
+			break
+		}
+	}
+
+	if logFile == "" {
+		fmt.Println("未找到日志文件，可能的位置:")
+		for _, logPath := range possibleLogs {
+			fmt.Printf("  - %s\n", logPath)
+		}
+		fmt.Println("\n服务可能尚未启动过，或日志目录不在当前路径")
 		return
 	}
 
 	if follow {
 		// 实时查看日志
-		fmt.Printf("实时查看日志: %s\n", stdoutLog)
+		fmt.Printf("实时查看日志: %s\n", logFile)
 		fmt.Println("按 Ctrl+C 退出\n")
-		cli.TailFollow(stdoutLog)
+		cli.TailFollow(logFile)
 	} else {
 		// 查看最近 N 行
-		cli.TailLines(stdoutLog, lines)
+		fmt.Printf("日志文件: %s\n\n", logFile)
+		cli.TailLines(logFile, lines)
 	}
 }
 
