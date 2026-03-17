@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.6"
+const VERSION = "1.0.7"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -277,6 +277,11 @@ func handleDevices() {
 		}
 	}
 
+	// 检查服务是否运行
+	if !cli.CheckServiceAndGuide() {
+		os.Exit(1)
+	}
+
 	if err := cli.GetDevices(server, key, verbose, jsonOutput); err != nil {
 		if jsonOutput {
 			cli.OutputJSON(map[string]interface{}{"error": err.Error()})
@@ -517,6 +522,11 @@ func handleDisconnect() {
 }
 
 func handleMappings() {
+	// 检查服务是否运行
+	if !cli.CheckServiceAndGuide() {
+		os.Exit(1)
+	}
+
 	// 检查 --json 参数
 	jsonOutput := false
 	for _, arg := range os.Args[2:] {
@@ -541,6 +551,11 @@ func handleAdb() {
 		fmt.Println("用法:")
 		fmt.Println("  jpy-cloud adb -s <集控平台> -k <密钥> <设备ID> [--json]   开启 ADB WiFi")
 		fmt.Println("  jpy-cloud adb stop -s <集控平台> -k <密钥> <设备ID> [--json]   关闭 ADB WiFi")
+		os.Exit(1)
+	}
+
+	// 检查服务是否运行
+	if !cli.CheckServiceAndGuide() {
 		os.Exit(1)
 	}
 

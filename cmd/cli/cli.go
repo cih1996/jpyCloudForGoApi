@@ -676,7 +676,7 @@ func ServiceStart() error {
 	case "linux":
 		return runCommand("systemctl", "--user", "start", "jpy-cloud")
 	case "windows":
-		return runCommand("sc", "start", "jpy-cloud")
+		return windowsStartService()
 	default:
 		return fmt.Errorf("不支持的操作系统")
 	}
@@ -690,7 +690,7 @@ func ServiceStop() error {
 	case "linux":
 		return runCommand("systemctl", "--user", "stop", "jpy-cloud")
 	case "windows":
-		return runCommand("sc", "stop", "jpy-cloud")
+		return windowsStopService()
 	default:
 		return fmt.Errorf("不支持的操作系统")
 	}
@@ -704,7 +704,7 @@ func ServiceStatus() error {
 	case "linux":
 		return runCommand("systemctl", "--user", "status", "jpy-cloud")
 	case "windows":
-		return runCommand("sc", "query", "jpy-cloud")
+		return windowsServiceStatus()
 	default:
 		return fmt.Errorf("不支持的操作系统")
 	}
@@ -813,34 +813,161 @@ func uninstallLinuxService() error {
 	return nil
 }
 
-// Windows 服务安装
+// Windows 服务安装（复制文件 + 后台启动）
 func installWindowsService(binPath, workDir string) error {
-	// 使用 sc 命令创建服务
-	cmd := exec.Command("sc", "create", "jpy-cloud",
-		fmt.Sprintf("binPath=%s serve", binPath),
-		"start=auto",
-		"DisplayName=JPY Server")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("创建服务失败（需要管理员权限）: %v", err)
+	installPath := GetInstallPath()
+	dataDir := GetDataDir()
+
+	// 1. 先停止旧服务
+	fmt.Println("停止旧服务...")
+	windowsStopService()
+
+	// 2. 确保目录存在
+	os.MkdirAll(filepath.Dir(installPath), 0755)
+	os.MkdirAll(dataDir, 0755)
+
+	// 3. 复制文件到安装目录
+	fmt.Printf("安装到: %s\n", installPath)
+	src, err := os.Open(binPath)
+	if err != nil {
+		return fmt.Errorf("打开源文件失败: %v", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(installPath)
+	if err != nil {
+		return fmt.Errorf("创建目标文件失败: %v", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("复制文件失败: %v", err)
 	}
 
-	fmt.Println("服务已创建")
-	fmt.Println("启动服务: jpy-cloud service start")
+	// 4. 创建启动脚本（用于开机自启）
+	startupDir := filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+	batPath := filepath.Join(startupDir, "jpy-cloud.bat")
+	batContent := fmt.Sprintf(`@echo off
+cd /d "%s"
+start /b "" "%s" serve > nul 2>&1
+`, filepath.Dir(installPath), installPath)
+	os.WriteFile(batPath, []byte(batContent), 0644)
+	fmt.Printf("开机自启脚本: %s\n", batPath)
+
+	// 5. 立即启动服务
+	fmt.Println("启动服务...")
+	if err := windowsStartService(); err != nil {
+		return fmt.Errorf("启动服务失败: %v", err)
+	}
+
+	fmt.Println("\n✓ 安装完成！服务已在后台运行")
+	fmt.Println("  访问地址: http://127.0.0.1:1001")
 	return nil
 }
 
 func uninstallWindowsService() error {
-	ServiceStop()
-	cmd := exec.Command("sc", "delete", "jpy-cloud")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("删除服务失败（需要管理员权限）: %v", err)
-	}
-	fmt.Println("服务已卸载")
+	// 1. 停止服务
+	windowsStopService()
+
+	// 2. 删除程序文件
+	installPath := GetInstallPath()
+	os.Remove(installPath)
+
+	// 3. 删除开机自启脚本
+	startupDir := filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+	batPath := filepath.Join(startupDir, "jpy-cloud.bat")
+	os.Remove(batPath)
+
+	// 4. 删除数据目录
+	os.RemoveAll(GetDataDir())
+
+	fmt.Println("✓ 服务已卸载")
 	return nil
+}
+
+// windowsStartService 后台启动服务进程
+func windowsStartService() error {
+	installPath := GetInstallPath()
+
+	// 检查程序是否存在
+	if _, err := os.Stat(installPath); os.IsNotExist(err) {
+		// 如果安装路径不存在，尝试用当前程序
+		exe, _ := os.Executable()
+		installPath = exe
+	}
+
+	// 使用 PowerShell 后台启动
+	cmd := exec.Command("powershell", "-Command",
+		fmt.Sprintf(`Start-Process -FilePath '%s' -ArgumentList 'serve' -WorkingDirectory '%s' -WindowStyle Hidden`,
+			installPath, filepath.Dir(installPath)))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("启动失败: %v", err)
+	}
+
+	// 等待服务启动
+	time.Sleep(2 * time.Second)
+
+	// 检查是否启动成功
+	if isServiceRunning() {
+		fmt.Println("✓ 服务已启动")
+		fmt.Println("  访问地址: http://127.0.0.1:1001")
+		return nil
+	}
+	return fmt.Errorf("服务启动超时")
+}
+
+// windowsStopService 停止服务进程
+func windowsStopService() error {
+	// 使用 taskkill 杀掉 jpy-cloud.exe 进程
+	cmd := exec.Command("taskkill", "/F", "/IM", "jpy-cloud.exe")
+	cmd.Run() // 忽略错误（可能进程不存在）
+	fmt.Println("✓ 服务已停止")
+	return nil
+}
+
+// windowsServiceStatus 检查服务状态
+func windowsServiceStatus() error {
+	if isServiceRunning() {
+		fmt.Println("服务状态: 运行中")
+		fmt.Println("访问地址: http://127.0.0.1:1001")
+	} else {
+		fmt.Println("服务状态: 未运行")
+		fmt.Println("启动命令: jpy-cloud service start")
+	}
+	return nil
+}
+
+// isServiceRunning 检查服务是否在运行
+func isServiceRunning() bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:1001/api/config/get")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
+}
+
+// CheckServiceAndGuide 检查服务是否运行，如果没有则给出引导
+func CheckServiceAndGuide() bool {
+	if isServiceRunning() {
+		return true
+	}
+
+	fmt.Println("错误: 本地服务未启动")
+	fmt.Println("")
+	fmt.Println("请先启动服务:")
+	if runtime.GOOS == "windows" {
+		fmt.Println("  方式1: jpy-cloud service install  (安装并启动，推荐)")
+		fmt.Println("  方式2: jpy-cloud service start    (仅启动)")
+	} else {
+		fmt.Println("  jpy-cloud service install  # 安装服务")
+		fmt.Println("  jpy-cloud service start    # 启动服务")
+	}
+	fmt.Println("")
+	fmt.Println("或前台运行（调试用）:")
+	fmt.Println("  jpy-cloud serve")
+	return false
 }
 
 // Install 安装程序到系统
