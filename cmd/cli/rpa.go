@@ -1,24 +1,71 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"port-mapping-demo/internal/database"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
 
+// RpaFlow RPA 流程结构
+type RpaFlow struct {
+	ID          uint      `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Steps       []RpaStep `json:"steps"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// RpaStep RPA 步骤结构
+type RpaStep struct {
+	ID     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Type   string                 `json:"type"`
+	Params map[string]interface{} `json:"params"`
+}
+
+// DeviceConfig 设备配置结构
+type DeviceConfig struct {
+	DeviceID     int        `json:"deviceId"`
+	RpaID        uint       `json:"rpaId"`
+	Status       string     `json:"status"`
+	Mode         string     `json:"mode"`
+	CurrentStep  int        `json:"currentStep"`
+	SubStep      int        `json:"subStep"`
+	LoopCount    int        `json:"loopCount"`
+	SuccessCount int        `json:"successCount"`
+	FailCount    int        `json:"failCount"`
+	TotalTime    int        `json:"totalTime"`
+	LastError    string     `json:"lastError"`
+	StartedAt    *time.Time `json:"startedAt"`
+}
+
+// ExecutionHistory 执行历史结构
+type ExecutionHistory struct {
+	ID          uint      `json:"id"`
+	DeviceID    int       `json:"deviceId"`
+	RpaID       uint      `json:"rpaId"`
+	RpaName     string    `json:"rpaName"`
+	Status      string    `json:"status"`
+	CurrentStep int       `json:"currentStep"`
+	TotalSteps  int       `json:"totalSteps"`
+	Duration    int       `json:"duration"`
+	Result      string    `json:"result"`
+	ErrorMsg    string    `json:"errorMsg"`
+	StartedAt   time.Time `json:"startedAt"`
+	FinishedAt  time.Time `json:"finishedAt"`
+}
+
 // RpaCommand 处理 RPA 相关命令
 func RpaCommand(args []string) {
 	if len(args) == 0 {
 		printRpaUsage()
-		return
-	}
-
-	// 初始化数据库
-	if err := database.Init("./data"); err != nil {
-		fmt.Printf("数据库初始化失败: %v\n", err)
 		return
 	}
 
@@ -33,7 +80,7 @@ func RpaCommand(args []string) {
 	case "create", "new":
 		rpaCreate(subArgs)
 	case "delete", "rm":
-		rpaDelete(subArgs)
+		rpaDeleteCmd(subArgs)
 	case "step":
 		rpaStep(subArgs)
 	case "run", "exec":
@@ -97,12 +144,139 @@ RPA 命令行工具
 `)
 }
 
-// rpaList 列出所有 RPA 流程
+// ========== HTTP 客户端 ==========
+
+func rpaGet(path string, result interface{}) error {
+	url := LocalServerURL + "/api/rpa" + path
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var apiResp struct {
+		Data  json.RawMessage `json:"data"`
+		Error string          `json:"error"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+	if apiResp.Error != "" {
+		return fmt.Errorf("API 错误: %s", apiResp.Error)
+	}
+	if result != nil && len(apiResp.Data) > 0 {
+		return json.Unmarshal(apiResp.Data, result)
+	}
+	return nil
+}
+
+func rpaPost(path string, data interface{}, result interface{}) error {
+	url := LocalServerURL + "/api/rpa" + path
+	jsonData, _ := json.Marshal(data)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var apiResp struct {
+		Data    json.RawMessage `json:"data"`
+		Error   string          `json:"error"`
+		Message string          `json:"message"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+	if apiResp.Error != "" {
+		return fmt.Errorf("API 错误: %s", apiResp.Error)
+	}
+	if result != nil && len(apiResp.Data) > 0 {
+		return json.Unmarshal(apiResp.Data, result)
+	}
+	return nil
+}
+
+func rpaPut(path string, data interface{}, result interface{}) error {
+	url := LocalServerURL + "/api/rpa" + path
+	jsonData, _ := json.Marshal(data)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("PUT", url, bytes.NewReader(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var apiResp struct {
+		Data    json.RawMessage `json:"data"`
+		Error   string          `json:"error"`
+		Message string          `json:"message"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+	if apiResp.Error != "" {
+		return fmt.Errorf("API 错误: %s", apiResp.Error)
+	}
+	if result != nil && len(apiResp.Data) > 0 {
+		return json.Unmarshal(apiResp.Data, result)
+	}
+	return nil
+}
+
+func rpaDeleteRequest(path string) error {
+	url := LocalServerURL + "/api/rpa" + path
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("DELETE", url, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var apiResp struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+	if apiResp.Error != "" {
+		return fmt.Errorf("API 错误: %s", apiResp.Error)
+	}
+	return nil
+}
+
+// ========== 流程管理 ==========
+
 func rpaList(args []string) {
 	jsonOutput := containsFlag(args, "--json")
 
-	flows, err := database.GetAllRpaFlows()
-	if err != nil {
+	var flows []RpaFlow
+	if err := rpaGet("/flows", &flows); err != nil {
 		fmt.Printf("获取 RPA 列表失败: %v\n", err)
 		return
 	}
@@ -134,28 +308,18 @@ func rpaList(args []string) {
 	}
 }
 
-// rpaShow 查看 RPA 详情
 func rpaShow(args []string) {
 	if len(args) == 0 {
 		fmt.Println("用法: jpy-cloud rpa show <id>")
 		return
 	}
 
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 ID: %s\n", args[0])
-		return
-	}
-
+	id := args[0]
 	jsonOutput := containsFlag(args, "--json")
 
-	flow, err := database.GetRpaFlow(uint(id))
-	if err != nil {
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+id, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
-		return
-	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", id)
 		return
 	}
 
@@ -180,7 +344,6 @@ func rpaShow(args []string) {
 	}
 }
 
-// rpaCreate 创建 RPA 流程
 func rpaCreate(args []string) {
 	name := getFlagValue(args, "--name")
 	desc := getFlagValue(args, "--desc")
@@ -190,14 +353,15 @@ func rpaCreate(args []string) {
 		return
 	}
 
-	flow := &database.RpaFlow{
-		Name:        name,
-		Description: desc,
-		Steps:       make(database.RpaSteps, 0),
-		Enabled:     true,
+	reqData := map[string]interface{}{
+		"name":        name,
+		"description": desc,
+		"steps":       []interface{}{},
+		"enabled":     true,
 	}
 
-	if err := database.CreateRpaFlow(flow); err != nil {
+	var flow RpaFlow
+	if err := rpaPost("/flows", reqData, &flow); err != nil {
 		fmt.Printf("创建 RPA 失败: %v\n", err)
 		return
 	}
@@ -205,39 +369,31 @@ func rpaCreate(args []string) {
 	fmt.Printf("创建成功，ID: %d\n", flow.ID)
 }
 
-// rpaDelete 删除 RPA 流程
-func rpaDelete(args []string) {
+func rpaDeleteCmd(args []string) {
 	if len(args) == 0 {
 		fmt.Println("用法: jpy-cloud rpa delete <id>")
 		return
 	}
 
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 ID: %s\n", args[0])
-		return
-	}
+	id := args[0]
 
-	// 检查是否存在
-	flow, err := database.GetRpaFlow(uint(id))
-	if err != nil {
+	// 先获取详情确认存在
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+id, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
 		return
 	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", id)
-		return
-	}
 
-	if err := database.DeleteRpaFlow(uint(id)); err != nil {
+	if err := rpaDeleteRequest("/flows/" + id); err != nil {
 		fmt.Printf("删除 RPA 失败: %v\n", err)
 		return
 	}
 
-	fmt.Printf("已删除 RPA: %s (ID: %d)\n", flow.Name, id)
+	fmt.Printf("已删除 RPA: %s (ID: %s)\n", flow.Name, id)
 }
 
-// rpaStep 步骤管理
+// ========== 步骤管理 ==========
+
 func rpaStep(args []string) {
 	if len(args) == 0 {
 		fmt.Println("用法: jpy-cloud rpa step <list|add|remove|move> ...")
@@ -261,30 +417,21 @@ func rpaStep(args []string) {
 	}
 }
 
-// rpaStepList 列出步骤
 func rpaStepList(args []string) {
 	if len(args) == 0 {
 		fmt.Println("用法: jpy-cloud rpa step list <rpa_id>")
 		return
 	}
 
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 RPA ID: %s\n", args[0])
-		return
-	}
+	id := args[0]
+	jsonOutput := containsFlag(args, "--json")
 
-	flow, err := database.GetRpaFlow(uint(id))
-	if err != nil {
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+id, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
 		return
 	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", id)
-		return
-	}
 
-	jsonOutput := containsFlag(args, "--json")
 	if jsonOutput {
 		OutputJSON(flow.Steps)
 		return
@@ -307,19 +454,13 @@ func rpaStepList(args []string) {
 	}
 }
 
-// rpaStepAdd 添加步骤
 func rpaStepAdd(args []string) {
 	if len(args) == 0 {
 		fmt.Println("用法: jpy-cloud rpa step add <rpa_id> --type <类型> --name <名称> [--params <JSON>]")
 		return
 	}
 
-	rpaID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 RPA ID: %s\n", args[0])
-		return
-	}
-
+	rpaID := args[0]
 	stepType := getFlagValue(args, "--type")
 	stepName := getFlagValue(args, "--name")
 	paramsStr := getFlagValue(args, "--params")
@@ -329,13 +470,10 @@ func rpaStepAdd(args []string) {
 		return
 	}
 
-	flow, err := database.GetRpaFlow(uint(rpaID))
-	if err != nil {
+	// 获取当前流程
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+rpaID, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
-		return
-	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", rpaID)
 		return
 	}
 
@@ -351,9 +489,9 @@ func rpaStepAdd(args []string) {
 	}
 
 	// 生成步骤 ID
-	stepID := fmt.Sprintf("step_%d_%d", rpaID, time.Now().UnixNano())
+	stepID := fmt.Sprintf("step_%s_%d", rpaID, time.Now().UnixNano())
 
-	newStep := database.RpaStep{
+	newStep := RpaStep{
 		ID:     stepID,
 		Name:   stepName,
 		Type:   stepType,
@@ -362,7 +500,8 @@ func rpaStepAdd(args []string) {
 
 	flow.Steps = append(flow.Steps, newStep)
 
-	if err := database.UpdateRpaFlow(flow); err != nil {
+	// 更新流程
+	if err := rpaPut("/flows/"+rpaID, flow, nil); err != nil {
 		fmt.Printf("保存失败: %v\n", err)
 		return
 	}
@@ -370,32 +509,23 @@ func rpaStepAdd(args []string) {
 	fmt.Printf("已添加步骤: %s (类型: %s, 序号: %d)\n", stepName, stepType, len(flow.Steps)-1)
 }
 
-// rpaStepRemove 删除步骤
 func rpaStepRemove(args []string) {
 	if len(args) < 2 {
 		fmt.Println("用法: jpy-cloud rpa step remove <rpa_id> <index>")
 		return
 	}
 
-	rpaID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 RPA ID: %s\n", args[0])
-		return
-	}
-
+	rpaID := args[0]
 	index, err := strconv.Atoi(args[1])
 	if err != nil {
 		fmt.Printf("无效的序号: %s\n", args[1])
 		return
 	}
 
-	flow, err := database.GetRpaFlow(uint(rpaID))
-	if err != nil {
+	// 获取当前流程
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+rpaID, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
-		return
-	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", rpaID)
 		return
 	}
 
@@ -407,7 +537,8 @@ func rpaStepRemove(args []string) {
 	removedStep := flow.Steps[index]
 	flow.Steps = append(flow.Steps[:index], flow.Steps[index+1:]...)
 
-	if err := database.UpdateRpaFlow(flow); err != nil {
+	// 更新流程
+	if err := rpaPut("/flows/"+rpaID, flow, nil); err != nil {
 		fmt.Printf("保存失败: %v\n", err)
 		return
 	}
@@ -415,38 +546,28 @@ func rpaStepRemove(args []string) {
 	fmt.Printf("已删除步骤: %s (序号: %d)\n", removedStep.Name, index)
 }
 
-// rpaStepMove 移动步骤
 func rpaStepMove(args []string) {
 	if len(args) < 3 {
 		fmt.Println("用法: jpy-cloud rpa step move <rpa_id> <from> <to>")
 		return
 	}
 
-	rpaID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 RPA ID: %s\n", args[0])
-		return
-	}
-
+	rpaID := args[0]
 	from, err := strconv.Atoi(args[1])
 	if err != nil {
 		fmt.Printf("无效的源位置: %s\n", args[1])
 		return
 	}
-
 	to, err := strconv.Atoi(args[2])
 	if err != nil {
 		fmt.Printf("无效的目标位置: %s\n", args[2])
 		return
 	}
 
-	flow, err := database.GetRpaFlow(uint(rpaID))
-	if err != nil {
+	// 获取当前流程
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+rpaID, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
-		return
-	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", rpaID)
 		return
 	}
 
@@ -458,13 +579,14 @@ func rpaStepMove(args []string) {
 	// 移动步骤
 	step := flow.Steps[from]
 	flow.Steps = append(flow.Steps[:from], flow.Steps[from+1:]...)
-	newSteps := make(database.RpaSteps, 0, len(flow.Steps)+1)
+	newSteps := make([]RpaStep, 0, len(flow.Steps)+1)
 	newSteps = append(newSteps, flow.Steps[:to]...)
 	newSteps = append(newSteps, step)
 	newSteps = append(newSteps, flow.Steps[to:]...)
 	flow.Steps = newSteps
 
-	if err := database.UpdateRpaFlow(flow); err != nil {
+	// 更新流程
+	if err := rpaPut("/flows/"+rpaID, flow, nil); err != nil {
 		fmt.Printf("保存失败: %v\n", err)
 		return
 	}
@@ -472,28 +594,18 @@ func rpaStepMove(args []string) {
 	fmt.Printf("已移动步骤: %s (%d -> %d)\n", step.Name, from, to)
 }
 
-// rpaRun 执行 RPA
+// ========== 执行控制 ==========
+
 func rpaRun(args []string) {
 	if len(args) == 0 {
 		fmt.Println("用法: jpy-cloud rpa run <rpa_id> --device <device_id> [--mode single|loop]")
 		return
 	}
 
-	rpaID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		fmt.Printf("无效的 RPA ID: %s\n", args[0])
-		return
-	}
-
+	rpaID := args[0]
 	deviceIDStr := getFlagValue(args, "--device")
 	if deviceIDStr == "" {
 		fmt.Println("缺少参数: --device <device_id>")
-		return
-	}
-
-	deviceID, err := strconv.Atoi(deviceIDStr)
-	if err != nil {
-		fmt.Printf("无效的设备 ID: %s\n", deviceIDStr)
 		return
 	}
 
@@ -503,50 +615,35 @@ func rpaRun(args []string) {
 	}
 
 	// 检查 RPA 是否存在
-	flow, err := database.GetRpaFlow(uint(rpaID))
-	if err != nil {
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+rpaID, &flow); err != nil {
 		fmt.Printf("获取 RPA 失败: %v\n", err)
 		return
 	}
-	if flow == nil {
-		fmt.Printf("RPA 不存在: %d\n", rpaID)
-		return
-	}
 
-	// 设置设备关联的 RPA
-	runMode := database.ModeSingle
-	if mode == "loop" {
-		runMode = database.ModeLoop
+	// 绑定设备 RPA
+	bindData := map[string]interface{}{
+		"rpaId": flow.ID,
+		"mode":  mode,
 	}
-
-	if err := database.SetDeviceRpa(deviceID, uint(rpaID), runMode); err != nil {
-		fmt.Printf("设置设备 RPA 失败: %v\n", err)
+	if err := rpaPost("/devices/"+deviceIDStr+"/bind", bindData, nil); err != nil {
+		fmt.Printf("绑定设备 RPA 失败: %v\n", err)
 		return
 	}
 
 	// 启动执行
-	if err := database.StartDevice(deviceID); err != nil {
+	if err := rpaPost("/devices/"+deviceIDStr+"/start", nil, nil); err != nil {
 		fmt.Printf("启动执行失败: %v\n", err)
 		return
 	}
 
-	// 创建执行历史
-	history, err := database.CreateExecutionHistory(deviceID, uint(rpaID), flow.Name, len(flow.Steps))
-	if err != nil {
-		fmt.Printf("创建执行历史失败: %v\n", err)
-	}
-
 	fmt.Printf("已启动 RPA 执行\n")
-	fmt.Printf("  RPA: %s (ID: %d)\n", flow.Name, rpaID)
-	fmt.Printf("  设备: %d\n", deviceID)
+	fmt.Printf("  RPA: %s (ID: %d)\n", flow.Name, flow.ID)
+	fmt.Printf("  设备: %s\n", deviceIDStr)
 	fmt.Printf("  模式: %s\n", mode)
-	if history != nil {
-		fmt.Printf("  执行ID: %d\n", history.ID)
-	}
-	fmt.Println("\n使用 'jpy-cloud rpa status --device", deviceID, "' 查看执行状态")
+	fmt.Println("\n使用 'jpy-cloud rpa status --device", deviceIDStr, "' 查看执行状态")
 }
 
-// rpaStop 停止执行
 func rpaStop(args []string) {
 	deviceIDStr := getFlagValue(args, "--device")
 	if deviceIDStr == "" {
@@ -554,21 +651,14 @@ func rpaStop(args []string) {
 		return
 	}
 
-	deviceID, err := strconv.Atoi(deviceIDStr)
-	if err != nil {
-		fmt.Printf("无效的设备 ID: %s\n", deviceIDStr)
-		return
-	}
-
-	if err := database.StopDevice(deviceID); err != nil {
+	if err := rpaPost("/devices/"+deviceIDStr+"/stop", nil, nil); err != nil {
 		fmt.Printf("停止执行失败: %v\n", err)
 		return
 	}
 
-	fmt.Printf("已停止设备 %d 的 RPA 执行\n", deviceID)
+	fmt.Printf("已停止设备 %s 的 RPA 执行\n", deviceIDStr)
 }
 
-// rpaStatus 查看执行状态
 func rpaStatus(args []string) {
 	deviceIDStr := getFlagValue(args, "--device")
 	if deviceIDStr == "" {
@@ -576,21 +666,11 @@ func rpaStatus(args []string) {
 		return
 	}
 
-	deviceID, err := strconv.Atoi(deviceIDStr)
-	if err != nil {
-		fmt.Printf("无效的设备 ID: %s\n", deviceIDStr)
-		return
-	}
-
 	jsonOutput := containsFlag(args, "--json")
 
-	config, err := database.GetDeviceConfig(deviceID)
-	if err != nil {
+	var config DeviceConfig
+	if err := rpaGet("/devices/"+deviceIDStr, &config); err != nil {
 		fmt.Printf("获取设备状态失败: %v\n", err)
-		return
-	}
-	if config == nil {
-		fmt.Printf("设备 %d 无 RPA 配置\n", deviceID)
 		return
 	}
 
@@ -615,31 +695,23 @@ func rpaStatus(args []string) {
 	}
 }
 
-// rpaHistory 查看执行历史
 func rpaHistory(args []string) {
 	deviceIDStr := getFlagValue(args, "--device")
 	limitStr := getFlagValue(args, "--limit")
 	jsonOutput := containsFlag(args, "--json")
 
-	limit := 20
+	limit := "20"
 	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
+		limit = limitStr
 	}
 
-	var histories []database.RpaExecutionHistory
+	var histories []ExecutionHistory
 	var err error
 
 	if deviceIDStr != "" {
-		deviceID, parseErr := strconv.Atoi(deviceIDStr)
-		if parseErr != nil {
-			fmt.Printf("无效的设备 ID: %s\n", deviceIDStr)
-			return
-		}
-		histories, err = database.GetDeviceExecutionHistory(deviceID, limit)
+		err = rpaGet("/devices/"+deviceIDStr+"/history?limit="+limit, &histories)
 	} else {
-		histories, err = database.GetAllExecutionHistory(limit)
+		err = rpaGet("/history?limit="+limit, &histories)
 	}
 
 	if err != nil {
@@ -674,7 +746,8 @@ func rpaHistory(args []string) {
 	}
 }
 
-// 辅助函数
+// ========== 辅助函数 ==========
+
 func containsFlag(args []string, flag string) bool {
 	for _, a := range args {
 		if a == flag {
