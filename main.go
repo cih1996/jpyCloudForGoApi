@@ -706,9 +706,6 @@ func runServer() {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
 	})
 
-	// Start WebSocket Server
-	go framework.StartWS(1002)
-
 	// Start Device WebSocket Server
 	deviceServer.GetManager().SetOnConnect(func(dc *devicews.DeviceConn) {
 		logs.Info("[DeviceWS] 设备上线: %08X (%s)", dc.DeviceID, dc.Serialno)
@@ -728,7 +725,6 @@ func runServer() {
 	// Start Server
 	logs.Info("JPY Server v%s 已启动", VERSION)
 	logs.Info("API服务端口: 1001")
-	logs.Info("WebSocket端口: 1002")
 	logs.Info("设备连接端口: 1003")
 
 	if err := r.SetTrustedProxies(nil); err != nil {

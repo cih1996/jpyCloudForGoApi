@@ -207,10 +207,6 @@ const docTemplate = `<!DOCTYPE html>
                 <span class="info-label">HTTP API:</span>
                 <span class="info-value" id="http-base">Loading...</span>
             </div>
-            <div class="info-row">
-                <span class="info-label">WebSocket:</span>
-                <span class="info-value" id="ws-base">Loading...</span>
-            </div>
         </div>
         
         <div id="content"></div>
@@ -220,16 +216,13 @@ const docTemplate = `<!DOCTYPE html>
 
     <script>
         // Configuration
-        const WS_PORT = 1002;
         const apiDocs = %s;
 
         // Dynamic Connection Info
         const hostname = window.location.hostname;
         const httpBase = window.location.origin;
-        const wsBase = "ws://" + hostname + ":" + WS_PORT;
 
         document.getElementById('http-base').textContent = httpBase;
-        document.getElementById('ws-base').textContent = wsBase;
 
         function render() {
             const container = document.getElementById('content');
@@ -276,34 +269,17 @@ const docTemplate = `<!DOCTYPE html>
         function copyForAI() {
             const aiContext = {
                 project_info: {
-                    title: "Project API & WebSocket Definition",
+                    title: "Project API Definition",
                     generated_at: new Date().toISOString(),
                     connection_info: {
                         http_base_url: httpBase,
-                        websocket_url: wsBase,
-                        notes: "All API endpoints are available via HTTP POST and WebSocket. For WebSocket, use the envelope format specified in the 'protocols' section."
-                    }
-                },
-                protocols: {
-                    websocket_envelope: {
-                        request: {
-                            path: "String (matches API path)",
-                            id: "String (optional request ID)",
-                            data: "Object (matches API request body)"
-                        },
-                        response: {
-                            id: "String (matches request ID)",
-                            path: "String",
-                            success: "Boolean",
-                            message: "String (error message if any)",
-                            data: "Object (matches API response body)"
-                        }
+                        notes: "All API endpoints are available via HTTP."
                     }
                 },
                 endpoints: apiDocs
             };
-            
-            const text = "Here is the full API and WebSocket definition for the project. Please use this context for generating client code or understanding the system capabilities:\n\n" + 
+
+            const text = "Here is the full API definition for the project. Please use this context for generating client code or understanding the system capabilities:\n\n" +
                         JSON.stringify(aiContext, null, 2);
 
             navigator.clipboard.writeText(text).then(() => {
