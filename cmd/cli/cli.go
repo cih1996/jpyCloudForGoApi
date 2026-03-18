@@ -818,6 +818,20 @@ func installWindowsService(binPath, workDir string) error {
 	installDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "jpy-cloud")
 	installPath := filepath.Join(installDir, "jpy-cloud.exe")
 
+	// 获取当前执行文件的路径（源文件）
+	currentExe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("获取当前程序路径失败: %v", err)
+	}
+	// 解析符号链接，获取真实路径
+	currentExe, err = filepath.EvalSymlinks(currentExe)
+	if err != nil {
+		return fmt.Errorf("解析程序路径失败: %v", err)
+	}
+
+	fmt.Printf("源文件: %s\n", currentExe)
+	fmt.Printf("目标路径: %s\n", installPath)
+
 	// 1. 停止旧进程
 	fmt.Println("停止旧进程...")
 	exec.Command("taskkill", "/F", "/IM", "jpy-cloud.exe").Run()
@@ -825,15 +839,20 @@ func installWindowsService(binPath, workDir string) error {
 
 	// 2. 创建目录并复制文件
 	os.MkdirAll(installDir, 0755)
-	fmt.Printf("复制到: %s\n", installPath)
 
-	input, err := os.ReadFile(binPath)
+	input, err := os.ReadFile(currentExe)
 	if err != nil {
-		return fmt.Errorf("读取文件失败: %v", err)
+		return fmt.Errorf("读取源文件失败: %v", err)
 	}
+	fmt.Printf("源文件大小: %d 字节\n", len(input))
+
 	if err := os.WriteFile(installPath, input, 0755); err != nil {
-		return fmt.Errorf("写入文件失败: %v", err)
+		return fmt.Errorf("写入目标文件失败: %v", err)
 	}
+
+	// 验证复制结果
+	info, _ := os.Stat(installPath)
+	fmt.Printf("目标文件大小: %d 字节\n", info.Size())
 
 	// 3. 添加到 PATH 环境变量（用户级，失败也没关系）
 	fmt.Println("配置环境变量...")
