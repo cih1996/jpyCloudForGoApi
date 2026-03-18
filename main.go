@@ -578,6 +578,9 @@ func runServer() {
 	// Start RPA Engine
 	rpa.GetEngine().Start()
 
+	// Start Frontend WS Push Loop
+	service.StartFrontendPushLoop()
+
 	// Register Routes
 	framework.Register("POST", "/api/devices", "Get list of devices", service.GetDevices)
 	framework.Register("POST", "/api/mappings", "Get active mappings", service.GetMappings)
@@ -624,6 +627,9 @@ func runServer() {
 
 	// WebSocket support for Unified Request
 	r.GET("/api/unified/ws", service.UnifiedWSHandler)
+
+	// Frontend unified WebSocket (新架构：前端统一 WS 接口)
+	r.GET("/api/ws", service.FrontendWSHandler)
 
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))

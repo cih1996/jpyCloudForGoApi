@@ -1,16 +1,12 @@
 package config
 
 import (
-	"encoding/json"
 	"net/url"
-	"os"
 	"sync"
-
-	"github.com/ghp3000/logs"
 )
 
-const ConfigFile = "config.json"
-
+// AppConfig 纯内存配置，不再依赖 config.json 文件
+// CLI 每次调用都会传入地址和 KEY，前端用 localStorage 存储
 type AppConfig struct {
 	WsUrl string `json:"wsUrl"`
 }
@@ -22,47 +18,19 @@ var (
 
 func init() {
 	cfg = &AppConfig{
-		WsUrl: "wss://minio.accjs.cn/ws", // Default value
+		WsUrl: "", // 默认为空，需要通过 Login 设置
 	}
 }
 
-// LoadConfig loads configuration from file
+// LoadConfig 保留接口兼容，但不再读取文件
 func LoadConfig() {
-	lock.Lock()
-	defer lock.Unlock()
-
-	data, err := os.ReadFile(ConfigFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			logs.Info("Config file not found, using default values")
-			saveConfigInternal() // Save default config
-			return
-		}
-		logs.Error("Failed to read config file", err)
-		return
-	}
-
-	err = json.Unmarshal(data, cfg)
-	if err != nil {
-		logs.Error("Failed to parse config file", err)
-		return
-	}
-	logs.Info("Config loaded successfully", cfg.WsUrl)
+	// 不再从文件加载，纯内存模式
 }
 
-// SaveConfig saves current configuration to file
+// SaveConfig 保留接口兼容，但不再写入文件
 func SaveConfig() error {
-	lock.Lock()
-	defer lock.Unlock()
-	return saveConfigInternal()
-}
-
-func saveConfigInternal() error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(ConfigFile, data, 0644)
+	// 不再保存到文件
+	return nil
 }
 
 // GetWsUrl returns the current WsUrl safely
@@ -72,24 +40,16 @@ func GetWsUrl() string {
 	return cfg.WsUrl
 }
 
-// SetWsUrl updates the WsUrl and saves the config
-func SetWsUrl(url string) error {
+// SetWsUrl updates the WsUrl in memory only
+func SetWsUrl(wsUrl string) error {
 	lock.Lock()
 	defer lock.Unlock()
-	cfg.WsUrl = url
-	return saveConfigInternal()
-}
-
-// SetWsUrlMemory updates the WsUrl only in memory (for testing)
-func SetWsUrlMemory(url string) {
-	lock.Lock()
-	defer lock.Unlock()
-	cfg.WsUrl = url
+	cfg.WsUrl = wsUrl
+	return nil
 }
 
 // GetTableIP 从 WsUrl 中提取集控平台主机地址
 // 例如 "wss://minio.accjs.cn/ws" → "minio.accjs.cn"
-// JpyApiAgent 的 NewCore 需要纯主机地址，内部会自行拼接 wss:// 和 /ws
 func GetTableIP() string {
 	lock.RLock()
 	defer lock.RUnlock()
@@ -99,7 +59,6 @@ func GetTableIP() string {
 	}
 	u, err := url.Parse(wsUrl)
 	if err != nil {
-		// 解析失败，尝试直接返回（可能本身就是纯主机地址）
 		return wsUrl
 	}
 	if u.Host != "" {

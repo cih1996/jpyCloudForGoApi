@@ -117,7 +117,7 @@ func EnsureLogin(key string, host string) error {
 	// 获取集控平台地址（去掉 wss:// 前缀和 /ws 后缀，JpyApiAgent 内部会自行拼接）
 	tableIP := config.GetTableIP()
 	if tableIP == "" {
-		return fmt.Errorf("集控平台地址未配置，请通过 /api/config/update 设置")
+		return fmt.Errorf("未登录，请先通过前端或 CLI 登录集控平台")
 	}
 
 	logs.Info("正在通过 JpyApiAgent 连接集控平台: %s", tableIP)
