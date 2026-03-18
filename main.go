@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.10"
+const VERSION = "1.0.11"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -34,14 +34,10 @@ func main() {
 	switch cmd {
 	case "serve", "server", "run":
 		runServer()
-	case "install":
-		handleInstall()
-	case "uninstall":
-		handleUninstall()
-	case "upgrade", "update":
-		handleUpgrade()
+	case "install", "uninstall", "upgrade", "update":
+		fmt.Println("该命令已移除，请直接运行: jpy-cloud serve")
 	case "service":
-		handleService()
+		fmt.Println("service 命令已移除，请直接运行: jpy-cloud serve")
 	case "devices", "device":
 		handleDevices()
 	case "shell", "sh":
@@ -76,19 +72,8 @@ JPY Server v%s - 集控平台本地代理
 用法:
   jpy-cloud <命令> [参数]
 
-安装命令:
-  install                  安装程序到系统并添加到 PATH
-  uninstall                卸载程序和服务
-  upgrade                  升级到当前版本
-
 服务命令:
-  serve                    启动服务（前台运行）
-  service install          安装为系统服务（开机自启）
-  service uninstall        卸载系统服务
-  service start            启动服务
-  service stop             停止服务
-  service status           查看服务状态
-  service restart          重启服务
+  serve                    启动后端服务（前台运行）
 
 设备命令（需要 -s 和 -k 参数，本地服务必须已启动，支持 --json 输出）:
   devices -s <集控平台> -k <密钥> [-v] [--json]           获取设备列表
@@ -161,99 +146,6 @@ func parseServerKey(args []string) (server, key string, remaining []string) {
 		}
 	}
 	return
-}
-
-func handleInstall() {
-	binPath, _ := os.Executable()
-	binPath, _ = filepath.Abs(binPath)
-
-	if err := cli.Install(binPath); err != nil {
-		fmt.Printf("安装失败: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func handleUninstall() {
-	if err := cli.Uninstall(); err != nil {
-		fmt.Printf("卸载失败: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func handleUpgrade() {
-	binPath, _ := os.Executable()
-	binPath, _ = filepath.Abs(binPath)
-
-	if err := cli.Upgrade(binPath); err != nil {
-		fmt.Printf("升级失败: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func handleService() {
-	if len(os.Args) < 3 {
-		fmt.Println("用法: jpy-cloud service <install|uninstall|start|stop|status|restart>")
-		return
-	}
-
-	action := os.Args[2]
-	binPath := cli.GetInstallPath()
-	workDir := cli.GetDataDir()
-
-	// 确保工作目录存在
-	os.MkdirAll(workDir, 0755)
-
-	switch action {
-	case "install":
-		// 检查程序是否已安装
-		if _, err := os.Stat(binPath); os.IsNotExist(err) {
-			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
-			fmt.Println("请先执行: sudo ./jpy-cloud install")
-			os.Exit(1)
-		}
-		if err := cli.ServiceInstall(binPath, workDir); err != nil {
-			fmt.Printf("安装失败: %v\n", err)
-		}
-	case "uninstall":
-		if err := cli.ServiceUninstall(); err != nil {
-			fmt.Printf("卸载失败: %v\n", err)
-		}
-	case "start":
-		// 检查程序是否已安装
-		if _, err := os.Stat(binPath); os.IsNotExist(err) {
-			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
-			fmt.Println("请先执行: sudo ./jpy-cloud install")
-			os.Exit(1)
-		}
-		if err := cli.ServiceStart(); err != nil {
-			fmt.Printf("启动失败: %v\n", err)
-		} else {
-			fmt.Println("服务已启动")
-		}
-	case "stop":
-		if err := cli.ServiceStop(); err != nil {
-			fmt.Printf("停止失败: %v\n", err)
-		} else {
-			fmt.Println("服务已停止")
-		}
-	case "restart":
-		// 检查程序是否已安装
-		if _, err := os.Stat(binPath); os.IsNotExist(err) {
-			fmt.Printf("错误: 程序未安装到 %s\n", binPath)
-			fmt.Println("请先执行: sudo ./jpy-cloud install")
-			os.Exit(1)
-		}
-		cli.ServiceStop()
-		if err := cli.ServiceStart(); err != nil {
-			fmt.Printf("重启失败: %v\n", err)
-		} else {
-			fmt.Println("服务已重启")
-		}
-	case "status":
-		cli.ServiceStatus()
-	default:
-		fmt.Printf("未知操作: %s\n", action)
-	}
 }
 
 func handleDevices() {
