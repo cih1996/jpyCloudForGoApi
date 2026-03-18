@@ -32,18 +32,25 @@ type RpaStep struct {
 
 // DeviceConfig 设备配置结构
 type DeviceConfig struct {
-	DeviceID     int        `json:"deviceId"`
-	RpaID        uint       `json:"rpaId"`
-	Status       string     `json:"status"`
-	Mode         string     `json:"mode"`
-	CurrentStep  int        `json:"currentStep"`
-	SubStep      int        `json:"subStep"`
-	LoopCount    int        `json:"loopCount"`
-	SuccessCount int        `json:"successCount"`
-	FailCount    int        `json:"failCount"`
-	TotalTime    int        `json:"totalTime"`
-	LastError    string     `json:"lastError"`
-	StartedAt    *time.Time `json:"startedAt"`
+	DeviceID       int        `json:"deviceId"`
+	RpaID          uint       `json:"rpaId"`
+	RpaName        string     `json:"rpaName"`
+	Status         string     `json:"status"`
+	Mode           string     `json:"mode"`
+	CurrentStep    int        `json:"currentStep"`
+	TotalSteps     int        `json:"totalSteps"`
+	StepName       string     `json:"stepName"`
+	SubStep        int        `json:"subStep"`
+	SubStepName    string     `json:"subStepName"`
+	LoopCount      int        `json:"loopCount"`
+	SuccessCount   int        `json:"successCount"`
+	FailCount      int        `json:"failCount"`
+	TotalTime      int        `json:"totalTime"`
+	LastError      string     `json:"lastError"`
+	StartedAt      *time.Time `json:"startedAt"`
+	LoopStartAt    *time.Time `json:"loopStartAt"`
+	ScriptStatus   string     `json:"scriptStatus"`
+	ScriptProgress int        `json:"scriptProgress"`
 }
 
 // ExecutionHistory 执行历史结构
@@ -681,17 +688,57 @@ func rpaStatus(args []string) {
 
 	fmt.Printf("设备 ID: %d\n", config.DeviceID)
 	fmt.Printf("RPA ID: %d\n", config.RpaID)
+	if config.RpaName != "" {
+		fmt.Printf("RPA 名称: %s\n", config.RpaName)
+	}
 	fmt.Printf("状态: %s\n", config.Status)
-	fmt.Printf("模式: %s\n", config.Mode)
-	fmt.Printf("当前步骤: %d (子步骤: %d)\n", config.CurrentStep, config.SubStep)
+	if config.Mode != "" {
+		fmt.Printf("模式: %s\n", config.Mode)
+	}
+
+	// 当前步骤显示优化
+	if config.TotalSteps > 0 {
+		stepInfo := fmt.Sprintf("%d/%d", config.CurrentStep, config.TotalSteps)
+		if config.StepName != "" {
+			stepInfo += " - " + config.StepName
+		}
+		if config.SubStep > 0 || config.SubStepName != "" {
+			subInfo := fmt.Sprintf(" (子步骤: %d", config.SubStep)
+			if config.SubStepName != "" {
+				subInfo += " - " + config.SubStepName
+			}
+			subInfo += ")"
+			stepInfo += subInfo
+		}
+		fmt.Printf("当前步骤: %s\n", stepInfo)
+	} else {
+		fmt.Printf("当前步骤: %d (子步骤: %d)\n", config.CurrentStep, config.SubStep)
+	}
+
 	fmt.Printf("循环次数: %d\n", config.LoopCount)
 	fmt.Printf("成功/失败: %d/%d\n", config.SuccessCount, config.FailCount)
-	fmt.Printf("总耗时: %d 秒\n", config.TotalTime)
+
+	// 计算已耗时
+	elapsed := config.TotalTime
+	if config.Status == "running" && config.LoopStartAt != nil {
+		elapsed = int(time.Since(*config.LoopStartAt).Seconds())
+	}
+	fmt.Printf("已耗时: %d 秒\n", elapsed)
+
+	// 脚本状态（如果有）
+	if config.ScriptStatus != "" {
+		fmt.Printf("脚本状态: %s (%d%%)\n", config.ScriptStatus, config.ScriptProgress)
+	}
+
+	// 最后错误（始终显示，即使为空也显示"无"）
 	if config.LastError != "" {
 		fmt.Printf("最后错误: %s\n", config.LastError)
 	}
+
 	if config.StartedAt != nil {
 		fmt.Printf("开始时间: %s\n", config.StartedAt.Format("2006-01-02 15:04:05"))
+	} else if config.LoopStartAt != nil {
+		fmt.Printf("开始时间: %s\n", config.LoopStartAt.Format("2006-01-02 15:04:05"))
 	}
 }
 
