@@ -30,16 +30,18 @@ func (s *StartBotStep) Name() string {
 }
 
 func (s *StartBotStep) SubSteps() []string {
-	return []string{"写入配置", "启动APK", "等待连接"}
+	return []string{"启动accSys", "写入配置", "启动APK", "等待连接"}
 }
 
 func (s *StartBotStep) Execute(deviceID int, params map[string]interface{}, subStep int, ctx database.StepContext) rpa.StepResult {
 	switch subStep {
 	case 0:
-		return s.writeConfig(deviceID, params, ctx)
+		return s.startAccSys(deviceID, params, ctx)
 	case 1:
-		return s.startApp(deviceID, params, ctx)
+		return s.writeConfig(deviceID, params, ctx)
 	case 2:
+		return s.startApp(deviceID, params, ctx)
+	case 3:
 		return s.waitConnection(deviceID, params, ctx)
 	default:
 		return rpa.StepResult{
@@ -47,6 +49,59 @@ func (s *StartBotStep) Execute(deviceID int, params map[string]interface{}, subS
 			Success:   false,
 			Error:     fmt.Sprintf("未知子步骤: %d", subStep),
 		}
+	}
+}
+
+// startAccSys 启动 accSys 服务
+func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, ctx database.StepContext) rpa.StepResult {
+	// 获取包名，默认 com.jpy.bot
+	packageName, _ := params["packageName"].(string)
+	if packageName == "" {
+		packageName = "com.jpy.bot"
+	}
+
+	// 构建 shell 命令：复制 accSys 到 /data/local/tmp 并后台启动
+	shellCmd := fmt.Sprintf(
+		"cp /sdcard/Android/data/%s/cache/assets/sys/accSys /data/local/tmp/accSys && cd /data/local/tmp/ && chmod +x ./accSys && nohup ./accSys >./accSys.log 2>&1 &",
+		packageName,
+	)
+
+	req := &service.UnifiedRequest{
+		Type: "execShell",
+		Seq:  int(time.Now().Unix()),
+		Data: map[string]interface{}{
+			"deviceId": float64(deviceID),
+			"shell":    shellCmd,
+		},
+	}
+
+	res, err := service.HandleUnifiedRequestHTTP(context.Background(), req)
+	if err != nil {
+		return rpa.StepResult{
+			Completed: true,
+			Success:   false,
+			Error:     fmt.Sprintf("启动accSys失败: %v", err),
+		}
+	}
+
+	if res.Code != 200 {
+		return rpa.StepResult{
+			Completed: true,
+			Success:   false,
+			Error:     fmt.Sprintf("启动accSys失败: %s", res.Msg),
+		}
+	}
+
+	logger.LogInfo("[RPA] 设备 %d 启动accSys，等待3秒...", deviceID)
+
+	// 等待 3 秒让 accSys 启动
+	time.Sleep(3 * time.Second)
+
+	// 进入下一步：写入配置
+	return rpa.StepResult{
+		Completed: false,
+		NextSub:   1,
+		Context:   ctx,
 	}
 }
 
@@ -146,7 +201,7 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 
 	return rpa.StepResult{
 		Completed: false,
-		NextSub:   1,
+		NextSub:   2,
 		Context:   newCtx,
 	}
 }
@@ -199,7 +254,7 @@ func (s *StartBotStep) startApp(deviceID int, params map[string]interface{}, ctx
 
 	return rpa.StepResult{
 		Completed: false,
-		NextSub:   2,
+		NextSub:   3,
 		Context:   newCtx,
 	}
 }
@@ -287,7 +342,7 @@ func (s *StartBotStep) waitConnection(deviceID int, params map[string]interface{
 
 	return rpa.StepResult{
 		Completed: false,
-		NextSub:   2,
+		NextSub:   3,
 		Context:   newCtx,
 	}
 }
