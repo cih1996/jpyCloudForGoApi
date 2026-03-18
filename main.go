@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.7"
+const VERSION = "1.0.9"
 
 func main() {
 	if len(os.Args) < 2 {
