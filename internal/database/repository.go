@@ -232,6 +232,9 @@ func UpdateScriptFeedback(deviceID int, status string, progress int) error {
 
 // GetRunningDevices 获取所有运行中的设备
 func GetRunningDevices() ([]DeviceRpaConfig, error) {
+	if db == nil {
+		return nil, ErrNotInitialized
+	}
 	var configs []DeviceRpaConfig
 	err := db.Where("status = ?", StatusRunning).Find(&configs).Error
 	return configs, err
@@ -239,6 +242,9 @@ func GetRunningDevices() ([]DeviceRpaConfig, error) {
 
 // GetAllDeviceConfigs 获取所有设备配置
 func GetAllDeviceConfigs() ([]DeviceRpaConfig, error) {
+	if db == nil {
+		return []DeviceRpaConfig{}, nil // 数据库未初始化时返回空列表
+	}
 	var configs []DeviceRpaConfig
 	err := db.Find(&configs).Error
 	return configs, err
@@ -273,6 +279,9 @@ func DeleteRpaFlow(id uint) error {
 
 // GetAllRpaFlows 获取所有 RPA 流程
 func GetAllRpaFlows() ([]RpaFlow, error) {
+	if db == nil {
+		return []RpaFlow{}, nil
+	}
 	var flows []RpaFlow
 	err := db.Find(&flows).Error
 	return flows, err

@@ -896,16 +896,24 @@ func windowsStartService() error {
 		installPath = exe
 	}
 
-	// 使用 PowerShell 后台启动
-	cmd := exec.Command("powershell", "-Command",
-		fmt.Sprintf(`Start-Process -FilePath '%s' -ArgumentList 'serve' -WorkingDirectory '%s' -WindowStyle Hidden`,
-			installPath, filepath.Dir(installPath)))
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("启动失败: %v", err)
+	workDir := filepath.Dir(installPath)
+
+	// 方法1: 使用 cmd /c start 启动（更兼容）
+	cmd := exec.Command("cmd", "/c", "start", "/b", "", installPath, "serve")
+	cmd.Dir = workDir
+	// 不等待命令完成
+	if err := cmd.Start(); err != nil {
+		// 方法2: 如果 cmd 失败，尝试 PowerShell
+		psCmd := exec.Command("powershell", "-Command",
+			fmt.Sprintf(`Start-Process -FilePath "%s" -ArgumentList "serve" -WorkingDirectory "%s" -WindowStyle Hidden`,
+				installPath, workDir))
+		if psErr := psCmd.Run(); psErr != nil {
+			return fmt.Errorf("启动失败: cmd=%v, powershell=%v", err, psErr)
+		}
 	}
 
 	// 等待服务启动
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// 检查是否启动成功
 	if isServiceRunning() {
@@ -913,7 +921,11 @@ func windowsStartService() error {
 		fmt.Println("  访问地址: http://127.0.0.1:1001")
 		return nil
 	}
-	return fmt.Errorf("服务启动超时")
+
+	// 如果服务没启动，尝试获取更多信息
+	fmt.Println("提示: 服务可能启动失败，请手动运行以下命令查看错误:")
+	fmt.Printf("  cd /d \"%s\" && jpy-cloud.exe serve\n", workDir)
+	return fmt.Errorf("服务启动超时，请检查端口 1001 是否被占用")
 }
 
 // windowsStopService 停止服务进程
