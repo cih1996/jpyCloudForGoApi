@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.13"
+const VERSION = "1.0.14"
 
 func init() {
 	// CLI 模式下禁用 debug 日志输出到 stderr
@@ -598,6 +598,16 @@ func runServer() {
 		c.Header("Content-Disposition", "attachment; filename=unified_service.log")
 		c.Header("Content-Type", "application/octet-stream")
 		c.File(logFile)
+	})
+
+	// Health check
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok", "version": VERSION})
+	})
+
+	// Version API
+	r.GET("/api/version", func(c *gin.Context) {
+		c.JSON(200, gin.H{"version": VERSION})
 	})
 
 	// WebSocket support for Unified Request
