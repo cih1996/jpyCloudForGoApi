@@ -6,7 +6,6 @@
 
 - **Web 管理界面**：设备管理、截图、Shell、OCR 识别
 - **CLI 命令行工具**：独立运行，无需配置文件
-- **系统服务**：支持开机自启（macOS/Linux/Windows）
 - **单文件部署**：前端嵌入二进制，无需额外静态文件
 - **跨平台支持**：Windows、macOS、Linux
 - **统一 API 架构**：HTTP/WebSocket 双协议支持
@@ -17,41 +16,26 @@
 
 从 [Releases](https://github.com/cih1996/jpyCloudForGoApi/releases) 下载对应平台的二进制文件。
 
-### 安装并启动
+### 启动服务
 
 **Windows:**
 ```cmd
-jpy-cloud service install
+jpy-cloud.exe serve
 ```
-执行后会自动安装并启动服务，同时创建开机自启脚本。
 
 **macOS / Linux:**
 ```bash
-chmod +x jpy-cloud-darwin-arm64
-sudo mv jpy-cloud-darwin-arm64 /usr/local/bin/jpy-cloud
-jpy-cloud service install
-jpy-cloud service start
+chmod +x jpy-cloud
+./jpy-cloud serve
 ```
 
-### 访问 Web 界面
-
-启动后访问：http://localhost:1001
+保持终端运行，服务启动后访问：http://localhost:1001
 
 ## CLI 命令
 
-### 服务管理
-
-```bash
-jpy-cloud service install    # 安装服务（Windows 会自动启动）
-jpy-cloud service start      # 启动服务
-jpy-cloud service stop       # 停止服务
-jpy-cloud service status     # 查看状态
-jpy-cloud service uninstall  # 卸载服务
-```
-
 ### 设备操作
 
-所有设备命令需要 `-s`（服务器地址）和 `-k`（API 密钥）参数：
+所有设备命令需要 `-s`（服务器地址）和 `-k`（API 密钥）参数，且需要先启动服务：
 
 ```bash
 # 获取设备列表
@@ -116,35 +100,18 @@ jpy-cloud help     # 查看帮助
 | 1002 | WebSocket 通信 |
 | 1003 | 设备连接 |
 
-## 安装路径
-
-| 系统 | 程序路径 | 数据目录 |
-|------|----------|----------|
-| macOS | `/usr/local/bin/jpy-cloud` | `~/.jpy-cloud/` |
-| Linux | `/usr/local/bin/jpy-cloud` | `~/.jpy-cloud/` |
-| Windows | `%LOCALAPPDATA%\jpy-cloud\jpy-cloud.exe` | `%LOCALAPPDATA%\jpy-cloud\` |
-
 ## 日志文件
 
-| 系统 | 路径 |
-|------|------|
-| macOS/Linux | `~/.jpy-cloud/stdout.log` 或 `./logs/system.log` |
-| Windows | `./logs/system.log` |
+运行目录下的 `./logs/system.log`
 
 ## 常见问题
 
 ### 服务未启动时使用 CLI？
 
-会显示引导信息：
+会提示：
 ```
-错误: 本地服务未启动
-
-请先启动服务:
-  方式1: jpy-cloud service install  (安装并启动，推荐)
-  方式2: jpy-cloud service start    (仅启动)
-
-或前台运行（调试用）:
-  jpy-cloud serve
+错误: 本地服务未运行
+请先在另一个终端运行: jpy-cloud serve
 ```
 
 ### CLI 输出 debug 日志？
@@ -162,7 +129,7 @@ jpy-cloud devices -s https://example.com -k key 2>/dev/null
 ## 开发构建
 
 ```bash
-# 开发构建（前端 + 后端 + 重启服务）
+# 开发构建（前端 + 后端）
 make dev
 
 # 多平台打包

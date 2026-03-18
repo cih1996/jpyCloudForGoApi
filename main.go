@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.11"
+const VERSION = "1.0.12"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -106,17 +106,13 @@ ADB 调试命令:
 
 工作原理:
   CLI 命令通过本地后端服务（127.0.0.1:1001）转发到集控平台。
-  使用设备命令前，请确保本地服务已启动：jpy-cloud service start
+  使用设备命令前，请确保本地服务已启动：jpy-cloud serve
 
 示例:
-  # 安装程序
-  sudo ./jpy-cloud install
+  # 启动后端服务（保持终端运行）
+  jpy-cloud serve
 
-  # 安装并启动服务
-  jpy-cloud service install
-  jpy-cloud service start
-
-  # 获取设备列表
+  # 另开终端，获取设备列表
   jpy-cloud devices -s https://114.67.244.162 -k your-api-key
 
   # 执行 Shell 命令
