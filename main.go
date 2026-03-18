@@ -21,7 +21,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.12"
+const VERSION = "1.0.13"
+
+func init() {
+	// CLI 模式下禁用 debug 日志输出到 stderr
+	// 检查是否是 serve 命令，如果不是则丢弃 stderr
+	if len(os.Args) < 2 || (os.Args[1] != "serve" && os.Args[1] != "server" && os.Args[1] != "run") {
+		// 非 serve 命令，丢弃 stderr（第三方包的 debug 日志）
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err == nil {
+			os.Stderr = devNull
+		}
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
