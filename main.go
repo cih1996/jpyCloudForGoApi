@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.15"
+const VERSION = "1.0.16"
 
 func init() {
 	// CLI 模式下禁用 debug 日志输出到 stderr
