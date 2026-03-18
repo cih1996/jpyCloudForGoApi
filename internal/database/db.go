@@ -43,6 +43,7 @@ func Init(dataDir string) error {
 			&RpaFlow{},
 			&RpaLog{},
 			&ScriptRepo{},
+			&RpaExecutionHistory{},
 		); err != nil {
 			initErr = err
 			return

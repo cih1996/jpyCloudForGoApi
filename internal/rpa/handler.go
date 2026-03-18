@@ -51,6 +51,11 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		rpa.POST("/scripts", createScript)
 		rpa.PUT("/scripts/:id", updateScript)
 		rpa.DELETE("/scripts/:id", deleteScript)
+
+		// 执行历史
+		rpa.GET("/history", listExecutionHistory)
+		rpa.GET("/history/:id", getExecutionHistory)
+		rpa.GET("/devices/:deviceId/history", getDeviceExecutionHistory)
 	}
 }
 
@@ -362,4 +367,41 @@ func deleteScript(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+
+// ========== 执行历史 ==========
+
+func listExecutionHistory(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	histories, err := database.GetAllExecutionHistory(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": histories})
+}
+
+func getExecutionHistory(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	history, err := database.GetExecutionHistory(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if history == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": history})
+}
+
+func getDeviceExecutionHistory(c *gin.Context) {
+	deviceID, _ := strconv.Atoi(c.Param("deviceId"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	histories, err := database.GetDeviceExecutionHistory(deviceID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": histories})
 }

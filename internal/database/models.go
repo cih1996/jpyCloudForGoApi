@@ -209,3 +209,45 @@ type ScriptRepo struct {
 func (ScriptRepo) TableName() string {
 	return "script_repo"
 }
+
+// ========== RPA 执行历史表 ==========
+
+// ExecutionStatus 执行状态
+type ExecutionStatus string
+
+const (
+	ExecStatusRunning   ExecutionStatus = "running"   // 运行中
+	ExecStatusSuccess   ExecutionStatus = "success"   // 成功
+	ExecStatusFailed    ExecutionStatus = "failed"    // 失败
+	ExecStatusCancelled ExecutionStatus = "cancelled" // 取消
+)
+
+// RpaExecutionHistory RPA 执行历史
+type RpaExecutionHistory struct {
+	ID       uint `gorm:"primaryKey" json:"id"`
+	DeviceID int  `gorm:"index;not null" json:"deviceId"`
+	RpaID    uint `gorm:"index;not null" json:"rpaId"`
+	RpaName  string `gorm:"type:varchar(100)" json:"rpaName"`
+
+	// 执行状态
+	Status ExecutionStatus `gorm:"type:varchar(20);default:'running'" json:"status"`
+
+	// 进度
+	TotalSteps   int `gorm:"default:0" json:"totalSteps"`
+	CurrentStep  int `gorm:"default:0" json:"currentStep"`
+	CurrentSubStep int `gorm:"default:0" json:"currentSubStep"`
+
+	// 结果
+	SuccessSteps int    `gorm:"default:0" json:"successSteps"`
+	FailedSteps  int    `gorm:"default:0" json:"failedSteps"`
+	ErrorMessage string `gorm:"type:text" json:"errorMessage"`
+
+	// 时间
+	StartedAt   time.Time  `gorm:"autoCreateTime" json:"startedAt"`
+	CompletedAt *time.Time `json:"completedAt"`
+	Duration    int64      `gorm:"default:0" json:"duration"` // 耗时（秒）
+}
+
+func (RpaExecutionHistory) TableName() string {
+	return "rpa_execution_history"
+}

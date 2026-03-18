@@ -21,7 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const VERSION = "1.0.16"
+const VERSION = "1.0.17"
 
 func init() {
 	// CLI 模式下禁用 debug 日志输出到 stderr
@@ -66,6 +66,8 @@ func main() {
 		handleMappings()
 	case "adb":
 		handleAdb()
+	case "rpa":
+		cli.RpaCommand(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Printf("jpy-cloud version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "--help":
@@ -105,6 +107,16 @@ ADB 调试命令:
   logs                     查看日志文件路径
   logs -f                  实时查看日志（tail -f）
   logs -n <行数>           查看最近 N 行日志
+
+RPA 命令（本地数据库操作，无需 -s -k 参数）:
+  rpa list                 列出所有 RPA 流程
+  rpa show <id>            查看 RPA 详情
+  rpa create --name <名称> 创建 RPA 流程
+  rpa step add <id> ...    添加步骤
+  rpa run <id> --device <设备ID>  执行 RPA
+  rpa status --device <设备ID>    查看执行状态
+  rpa history              查看执行历史
+  （更多命令请执行 jpy-cloud rpa help）
 
 其他:
   version                  显示版本
