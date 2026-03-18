@@ -90,7 +90,11 @@ func EnsureLogin(key string, host string) error {
 			if err := config.SetWsUrl(newWsUrl); err != nil {
 				logs.Error("保存配置失败: %v", err)
 			}
-			// 地址变更，强制重新连接
+			// 地址变更，清理旧的中间件连接，强制重新连接
+			middleAgentRtc.ClearAll()
+			if jpyCore != nil {
+				jpyCore.Reset()
+			}
 			currentKey = ""
 			currentHost = ""
 			jpyCore = nil
@@ -102,8 +106,12 @@ func EnsureLogin(key string, host string) error {
 		return nil
 	}
 
+	// 切换用户或重新登录，清理旧状态
 	if jpyCore != nil {
-		logs.Info("切换用户，重新初始化 JpyApiAgent Core...")
+		logs.Info("切换用户，清理旧连接并重新初始化 JpyApiAgent Core...")
+		middleAgentRtc.ClearAll()
+		jpyCore.Reset()
+		jpyCore = nil
 	}
 
 	// 获取集控平台地址（去掉 wss:// 前缀和 /ws 后缀，JpyApiAgent 内部会自行拼接）
