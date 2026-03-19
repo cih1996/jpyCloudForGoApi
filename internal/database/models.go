@@ -251,3 +251,30 @@ type RpaExecutionHistory struct {
 func (RpaExecutionHistory) TableName() string {
 	return "rpa_execution_history"
 }
+
+// ========== RPA 执行步骤明细表 ==========
+
+// RpaExecutionStep 执行步骤明细
+type RpaExecutionStep struct {
+	ID        uint `gorm:"primaryKey" json:"id"`
+	HistoryID uint `gorm:"index;not null" json:"historyId"` // 关联执行历史
+	DeviceID  int  `gorm:"index;not null" json:"deviceId"`
+
+	// 步骤信息
+	StepIndex int    `gorm:"not null" json:"stepIndex"`
+	StepName  string `gorm:"type:varchar(100)" json:"stepName"`
+	StepType  string `gorm:"type:varchar(50)" json:"stepType"`
+
+	// 执行结果
+	Status       ExecutionStatus `gorm:"type:varchar(20);default:'running'" json:"status"`
+	ErrorMessage string          `gorm:"type:text" json:"errorMessage"`
+
+	// 时间
+	StartedAt   time.Time  `gorm:"autoCreateTime" json:"startedAt"`
+	CompletedAt *time.Time `json:"completedAt"`
+	Duration    int64      `gorm:"default:0" json:"duration"` // 耗时（毫秒）
+}
+
+func (RpaExecutionStep) TableName() string {
+	return "rpa_execution_step"
+}

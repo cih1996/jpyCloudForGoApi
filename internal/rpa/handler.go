@@ -55,6 +55,7 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		// 执行历史
 		rpa.GET("/history", listExecutionHistory)
 		rpa.GET("/history/:id", getExecutionHistory)
+		rpa.GET("/history/:id/steps", getExecutionSteps)
 		rpa.GET("/devices/:deviceId/history", getDeviceExecutionHistory)
 	}
 }
@@ -195,10 +196,24 @@ func bindDeviceRpa(c *gin.Context) {
 
 func startDevice(c *gin.Context) {
 	deviceID, _ := strconv.Atoi(c.Param("deviceId"))
+
+	// 先取消之前可能残留的运行中记录
+	database.CancelRunningExecutions(deviceID)
+
 	if err := database.StartDevice(deviceID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 创建执行记录
+	config, _ := database.GetDeviceConfig(deviceID)
+	if config != nil && config.RpaID > 0 {
+		flow, _ := database.GetRpaFlow(config.RpaID)
+		if flow != nil {
+			GetEngine().StartHistory(deviceID, flow.ID, flow.Name, len(flow.Steps))
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "启动成功"})
 }
 
@@ -222,6 +237,10 @@ func resumeDevice(c *gin.Context) {
 
 func stopDevice(c *gin.Context) {
 	deviceID, _ := strconv.Atoi(c.Param("deviceId"))
+
+	// 完成执行记录（标记为取消）
+	GetEngine().CompleteHistory(deviceID, database.ExecStatusCancelled, "用户手动停止")
+
 	if err := database.StopDevice(deviceID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -373,7 +392,11 @@ func deleteScript(c *gin.Context) {
 
 func listExecutionHistory(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	histories, err := database.GetAllExecutionHistory(limit)
+	deviceID, _ := strconv.Atoi(c.DefaultQuery("deviceId", "0"))
+	rpaID, _ := strconv.ParseUint(c.DefaultQuery("rpaId", "0"), 10, 64)
+	status := c.DefaultQuery("status", "")
+
+	histories, err := database.GetFilteredExecutionHistory(limit, deviceID, uint(rpaID), status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -392,7 +415,19 @@ func getExecutionHistory(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": history})
+	// 同时返回步骤明细
+	steps, _ := database.GetExecutionSteps(uint(id))
+	c.JSON(http.StatusOK, gin.H{"data": history, "steps": steps})
+}
+
+func getExecutionSteps(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	steps, err := database.GetExecutionSteps(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": steps})
 }
 
 func getDeviceExecutionHistory(c *gin.Context) {

@@ -19,6 +19,11 @@ type Engine struct {
 	interval   time.Duration // 轮询间隔
 	mu         sync.RWMutex
 	onProgress func(deviceID int, status EngineStatus) // 进度回调
+
+	// 执行记录追踪
+	historyMap   map[int]uint // deviceID -> historyID
+	stepMap      map[string]uint // "deviceID:stepIndex" -> stepID
+	historyMu    sync.Mutex
 }
 
 // EngineStatus 引擎状态（用于前端展示）
@@ -49,8 +54,10 @@ var (
 func GetEngine() *Engine {
 	engineOnce.Do(func() {
 		engineInstance = &Engine{
-			interval: 2 * time.Second, // 默认 2 秒轮询一次
-			stopCh:   make(chan struct{}),
+			interval:   2 * time.Second,
+			stopCh:     make(chan struct{}),
+			historyMap: make(map[int]uint),
+			stepMap:    make(map[string]uint),
 		}
 	})
 	return engineInstance
@@ -68,6 +75,90 @@ func (e *Engine) SetInterval(d time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.interval = d
+}
+
+// ========== 执行记录追踪 ==========
+
+func (e *Engine) historyKey(deviceID, stepIndex int) string {
+	return fmt.Sprintf("%d:%d", deviceID, stepIndex)
+}
+
+// StartHistory 创建执行记录
+func (e *Engine) StartHistory(deviceID int, rpaID uint, rpaName string, totalSteps int) {
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+
+	history, err := database.CreateExecutionHistory(deviceID, rpaID, rpaName, totalSteps)
+	if err != nil {
+		logger.LogError("[RPA History] 创建执行记录失败: %v", err)
+		return
+	}
+	e.historyMap[deviceID] = history.ID
+	logger.LogInfo("[RPA History] 设备 %d 创建执行记录 #%d", deviceID, history.ID)
+}
+
+// CompleteHistory 完成执行记录
+func (e *Engine) CompleteHistory(deviceID int, status database.ExecutionStatus, errorMsg string) {
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+
+	historyID, ok := e.historyMap[deviceID]
+	if !ok {
+		return
+	}
+
+	// 统计步骤成功/失败数
+	steps, _ := database.GetExecutionSteps(historyID)
+	successCount, failCount := 0, 0
+	for _, s := range steps {
+		if s.Status == database.ExecStatusSuccess {
+			successCount++
+		} else if s.Status == database.ExecStatusFailed {
+			failCount++
+		}
+	}
+
+	database.CompleteExecution(historyID, status, successCount, failCount, errorMsg)
+	delete(e.historyMap, deviceID)
+	logger.LogInfo("[RPA History] 设备 %d 执行记录 #%d 完成: %s", deviceID, historyID, status)
+}
+
+// StartStepRecord 记录步骤开始
+func (e *Engine) StartStepRecord(deviceID, stepIndex int, stepName, stepType string) {
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+
+	historyID, ok := e.historyMap[deviceID]
+	if !ok {
+		return
+	}
+
+	step, err := database.CreateExecutionStep(historyID, deviceID, stepIndex, stepName, stepType)
+	if err != nil {
+		logger.LogError("[RPA History] 创建步骤记录失败: %v", err)
+		return
+	}
+	e.stepMap[e.historyKey(deviceID, stepIndex)] = step.ID
+}
+
+// CompleteStepRecord 记录步骤完成
+func (e *Engine) CompleteStepRecord(deviceID, stepIndex int, status database.ExecutionStatus, errorMsg string) {
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+
+	key := e.historyKey(deviceID, stepIndex)
+	stepID, ok := e.stepMap[key]
+	if !ok {
+		return
+	}
+
+	database.CompleteExecutionStep(stepID, status, errorMsg)
+	delete(e.stepMap, key)
+
+	// 同步更新 history 的进度
+	if historyID, ok := e.historyMap[deviceID]; ok {
+		database.UpdateExecutionProgress(historyID, stepIndex, 0)
+	}
 }
 
 // Start 启动引擎
@@ -180,6 +271,11 @@ func (e *Engine) processDevice(config *database.DeviceRpaConfig) {
 	// 解析参数中的变量引用 {{varName}}
 	resolvedParams := e.resolveParams(step.Params, config.FlowVariables, config.DeviceID)
 
+	// 记录步骤开始（仅子步骤 0 时记录，避免重复）
+	if config.SubStep == 0 {
+		e.StartStepRecord(config.DeviceID, config.CurrentStep, step.Name, step.Type)
+	}
+
 	// 执行步骤
 	result := executor.Execute(config.DeviceID, resolvedParams, config.SubStep, config.StepContext)
 
@@ -279,6 +375,9 @@ func (e *Engine) handleStepResult(config *database.DeviceRpaConfig, flow *databa
 			logger.LogInfo("[RPA Engine] 设备 %d 步骤 %d (%s) 完成", config.DeviceID, config.CurrentStep, step.Name)
 			database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogSuccess, fmt.Sprintf("步骤完成: %s", step.Name), "")
 
+			// 记录步骤完成
+			e.CompleteStepRecord(config.DeviceID, config.CurrentStep, database.ExecStatusSuccess, "")
+
 			// 保存步骤输出到流程变量（排除控制指令）
 			if result.Output != nil && len(result.Output) > 0 {
 				// 复制输出，排除控制指令
@@ -345,6 +444,10 @@ func (e *Engine) handleStepResult(config *database.DeviceRpaConfig, flow *databa
 			database.SetDeviceError(config.DeviceID, result.Error)
 			database.AddLog(config.DeviceID, config.RpaID, config.CurrentStep, config.SubStep, database.LogError, result.Error, "")
 
+			// 记录步骤失败 + 完成执行记录
+			e.CompleteStepRecord(config.DeviceID, config.CurrentStep, database.ExecStatusFailed, result.Error)
+			e.CompleteHistory(config.DeviceID, database.ExecStatusFailed, result.Error)
+
 			// 通知进度
 			e.notifyProgress(config.DeviceID, flow, config.CurrentStep, config.SubStep, result.Error)
 		}
@@ -372,13 +475,20 @@ func (e *Engine) handleStepResult(config *database.DeviceRpaConfig, flow *databa
 // handleFlowComplete 处理流程完成
 func (e *Engine) handleFlowComplete(config *database.DeviceRpaConfig, flow *database.RpaFlow) {
 	if config.Mode == database.ModeLoop {
-		// 循环模式，重新开始
+		// 循环模式：完成本轮记录，重新开始
+		e.CompleteHistory(config.DeviceID, database.ExecStatusSuccess, "")
+
 		database.IncrementLoopCount(config.DeviceID)
 		database.UpdateDeviceProgress(config.DeviceID, 0, 0, make(database.StepContext))
 		logger.LogInfo("[RPA Engine] 设备 %d 完成一轮，开始第 %d 轮", config.DeviceID, config.LoopCount+1)
 		database.AddLog(config.DeviceID, config.RpaID, -1, -1, database.LogInfo, fmt.Sprintf("完成第 %d 轮，开始下一轮", config.LoopCount+1), "")
+
+		// 为下一轮创建新的执行记录
+		e.StartHistory(config.DeviceID, config.RpaID, flow.Name, len(flow.Steps))
 	} else {
 		// 单次模式，标记完成
+		e.CompleteHistory(config.DeviceID, database.ExecStatusSuccess, "")
+
 		database.SetDeviceCompleted(config.DeviceID)
 		logger.LogInfo("[RPA Engine] 设备 %d 流程执行完成", config.DeviceID)
 		database.AddLog(config.DeviceID, config.RpaID, -1, -1, database.LogSuccess, "流程执行完成", "")

@@ -476,6 +476,26 @@ func GetAllExecutionHistory(limit int) ([]RpaExecutionHistory, error) {
 	return histories, err
 }
 
+// GetFilteredExecutionHistory 带筛选的执行历史查询
+func GetFilteredExecutionHistory(limit, deviceID int, rpaID uint, status string) ([]RpaExecutionHistory, error) {
+	var histories []RpaExecutionHistory
+	query := db.Order("started_at DESC")
+	if deviceID > 0 {
+		query = query.Where("device_id = ?", deviceID)
+	}
+	if rpaID > 0 {
+		query = query.Where("rpa_id = ?", rpaID)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&histories).Error
+	return histories, err
+}
+
 // GetRunningExecutions 获取正在运行的执行记录
 func GetRunningExecutions() ([]RpaExecutionHistory, error) {
 	var histories []RpaExecutionHistory
@@ -486,5 +506,68 @@ func GetRunningExecutions() ([]RpaExecutionHistory, error) {
 // ClearOldExecutionHistory 清除旧的执行历史（保留最近 N 天）
 func ClearOldExecutionHistory(days int) error {
 	cutoff := time.Now().AddDate(0, 0, -days)
+	// 先删除关联的步骤明细
+	db.Where("history_id IN (SELECT id FROM rpa_execution_history WHERE started_at < ?)", cutoff).Delete(&RpaExecutionStep{})
 	return db.Where("started_at < ?", cutoff).Delete(&RpaExecutionHistory{}).Error
+}
+
+// ========== RpaExecutionStep 操作 ==========
+
+// CreateExecutionStep 创建步骤明细
+func CreateExecutionStep(historyID uint, deviceID int, stepIndex int, stepName, stepType string) (*RpaExecutionStep, error) {
+	step := &RpaExecutionStep{
+		HistoryID: historyID,
+		DeviceID:  deviceID,
+		StepIndex: stepIndex,
+		StepName:  stepName,
+		StepType:  stepType,
+		Status:    ExecStatusRunning,
+	}
+	err := db.Create(step).Error
+	return step, err
+}
+
+// CompleteExecutionStep 完成步骤
+func CompleteExecutionStep(stepID uint, status ExecutionStatus, errorMsg string) error {
+	now := time.Now()
+	var step RpaExecutionStep
+	if err := db.First(&step, stepID).Error; err != nil {
+		return err
+	}
+	duration := now.Sub(step.StartedAt).Milliseconds()
+	return db.Model(&RpaExecutionStep{}).Where("id = ?", stepID).Updates(map[string]interface{}{
+		"status":        status,
+		"error_message": errorMsg,
+		"completed_at":  now,
+		"duration":      duration,
+	}).Error
+}
+
+// GetExecutionSteps 获取执行历史的步骤明细
+func GetExecutionSteps(historyID uint) ([]RpaExecutionStep, error) {
+	var steps []RpaExecutionStep
+	err := db.Where("history_id = ?", historyID).Order("step_index ASC, started_at ASC").Find(&steps).Error
+	return steps, err
+}
+
+// GetLatestRunningHistory 获取设备最新的运行中执行记录
+func GetLatestRunningHistory(deviceID int) (*RpaExecutionHistory, error) {
+	var history RpaExecutionHistory
+	err := db.Where("device_id = ? AND status = ?", deviceID, ExecStatusRunning).
+		Order("started_at DESC").First(&history).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &history, err
+}
+
+// CancelRunningExecutions 取消设备所有运行中的执行记录
+func CancelRunningExecutions(deviceID int) error {
+	now := time.Now()
+	return db.Model(&RpaExecutionHistory{}).
+		Where("device_id = ? AND status = ?", deviceID, ExecStatusRunning).
+		Updates(map[string]interface{}{
+			"status":       ExecStatusCancelled,
+			"completed_at": now,
+		}).Error
 }
