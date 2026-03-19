@@ -133,6 +133,12 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 	if deviceName != "" {
 		configData["deviceName"] = deviceName
 	}
+	// apkPkg：目标应用包名
+	packageName, _ := params["packageName"].(string)
+	if packageName == "" {
+		packageName = "com.jpy.bot"
+	}
+	configData["apkPkg"] = packageName
 
 	configJSON, err := json.Marshal(configData)
 	if err != nil {
