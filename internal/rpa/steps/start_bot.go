@@ -30,7 +30,7 @@ func (s *StartBotStep) Name() string {
 }
 
 func (s *StartBotStep) SubSteps() []string {
-	return []string{"启动accSys", "写入配置", "启动APK", "等待连接"}
+	return []string{"启动accSys", "写入配置", "启动测试框架", "等待连接"}
 }
 
 func (s *StartBotStep) Execute(deviceID int, params map[string]interface{}, subStep int, ctx database.StepContext) rpa.StepResult {
@@ -206,7 +206,7 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 	}
 }
 
-// startApp 启动脚本 APK
+// startApp 通过 am instrument 启动测试框架（替代直接启动 APK）
 func (s *StartBotStep) startApp(deviceID int, params map[string]interface{}, ctx database.StepContext) rpa.StepResult {
 	// 获取包名，默认 com.jpy.bot
 	packageName, _ := params["packageName"].(string)
@@ -214,13 +214,21 @@ func (s *StartBotStep) startApp(deviceID int, params map[string]interface{}, ctx
 		packageName = "com.jpy.bot"
 	}
 
-	// 调用 startApp
+	// 等待 1 秒，让 accSys 充分启动
+	time.Sleep(1 * time.Second)
+
+	// 通过 am instrument 启动测试框架（脚本级权限）
+	shellCmd := fmt.Sprintf(
+		"nohup am instrument -w -r -e debug false -e class 'run.RunTest#useAppContext' %s/androidx.test.runner.AndroidJUnitRunner >/storage/emulated/0/Download/log_u2.txt 2>&1 &",
+		packageName,
+	)
+
 	req := &service.UnifiedRequest{
-		Type: "startApp",
+		Type: "execShell",
 		Seq:  int(time.Now().Unix()),
 		Data: map[string]interface{}{
-			"deviceId":    float64(deviceID),
-			"packageName": packageName,
+			"deviceId": float64(deviceID),
+			"shell":    shellCmd,
 		},
 	}
 
@@ -229,7 +237,7 @@ func (s *StartBotStep) startApp(deviceID int, params map[string]interface{}, ctx
 		return rpa.StepResult{
 			Completed: true,
 			Success:   false,
-			Error:     fmt.Sprintf("启动APK失败: %v", err),
+			Error:     fmt.Sprintf("启动测试框架失败: %v", err),
 		}
 	}
 
@@ -237,11 +245,11 @@ func (s *StartBotStep) startApp(deviceID int, params map[string]interface{}, ctx
 		return rpa.StepResult{
 			Completed: true,
 			Success:   false,
-			Error:     fmt.Sprintf("启动APK失败: %s", res.Msg),
+			Error:     fmt.Sprintf("启动测试框架失败: %s", res.Msg),
 		}
 	}
 
-	logger.LogInfo("[RPA] 设备 %d 启动脚本APK: %s", deviceID, packageName)
+	logger.LogInfo("[RPA] 设备 %d 通过 am instrument 启动: %s", deviceID, packageName)
 
 	// 保存上下文，进入等待连接步骤
 	newCtx := make(database.StepContext)

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"net/http"
 	"port-mapping-demo/internal/rpa"
@@ -15,15 +16,16 @@ import (
 
 // FrontendWSManager 前端 WebSocket 管理器
 type FrontendWSManager struct {
-	clients map[*websocket.Conn]*FrontendClient
-	lock    sync.RWMutex
+	clients    map[*websocket.Conn]*FrontendClient
+	lock       sync.RWMutex
+	lastHashes map[string][32]byte // 每种数据类型的上次 hash
+	hashLock   sync.Mutex
 }
 
 // FrontendClient 前端客户端信息
 type FrontendClient struct {
-	mu           *sync.Mutex
-	subscribes   map[string]bool // 订阅的数据类型
-	lastPushTime map[string]time.Time
+	mu         *sync.Mutex
+	subscribes map[string]bool // 订阅的数据类型
 }
 
 // FrontendMessage 前端 WS 消息格式
@@ -41,29 +43,30 @@ type FrontendPush struct {
 
 // DeviceWithLocal 带本地状态的设备信息
 type DeviceWithLocal struct {
-	// 集控平台原生字段（保持原样透传）
-	Raw interface{} `json:"raw"`
-	// 本地增强字段
+	Raw   interface{}       `json:"raw"`
 	Local *LocalDeviceState `json:"_local,omitempty"`
 }
 
 // LocalDeviceState 本地设备状态
 type LocalDeviceState struct {
-	RpaRunning     bool   `json:"rpaRunning"`
-	RpaID          uint   `json:"rpaId,omitempty"`
-	RpaName        string `json:"rpaName,omitempty"`
-	RpaStatus      string `json:"rpaStatus,omitempty"`
-	RpaStep        int    `json:"rpaStep,omitempty"`
-	RpaStepName    string `json:"rpaStepName,omitempty"`
-	RpaTotalSteps  int    `json:"rpaTotalSteps,omitempty"`
-	RpaLoopCount   int    `json:"rpaLoopCount,omitempty"`
-	RpaLastError   string `json:"rpaLastError,omitempty"`
-	RpaSubStep     int    `json:"rpaSubStep,omitempty"`
-	RpaSubStepName string `json:"rpaSubStepName,omitempty"`
+	RpaRunning     bool    `json:"rpaRunning"`
+	RpaID          uint    `json:"rpaId,omitempty"`
+	RpaName        string  `json:"rpaName,omitempty"`
+	RpaStatus      string  `json:"rpaStatus,omitempty"`
+	RpaStep        int     `json:"rpaStep,omitempty"`
+	RpaStepName    string  `json:"rpaStepName,omitempty"`
+	RpaTotalSteps  int     `json:"rpaTotalSteps,omitempty"`
+	RpaLoopCount   int     `json:"rpaLoopCount,omitempty"`
+	RpaLastError   string  `json:"rpaLastError,omitempty"`
+	RpaSubStep     int     `json:"rpaSubStep,omitempty"`
+	RpaSubStepName string  `json:"rpaSubStepName,omitempty"`
+	RpaTotalTime   int64   `json:"rpaTotalTime"`
+	RpaLoopStartAt *string `json:"rpaLoopStartAt,omitempty"`
 }
 
 var frontendWSManager = &FrontendWSManager{
-	clients: make(map[*websocket.Conn]*FrontendClient),
+	clients:    make(map[*websocket.Conn]*FrontendClient),
+	lastHashes: make(map[string][32]byte),
 }
 
 var frontendUpgrader = websocket.Upgrader{
@@ -83,9 +86,8 @@ func FrontendWSHandler(c *gin.Context) {
 
 	mu := &sync.Mutex{}
 	client := &FrontendClient{
-		mu:           mu,
-		subscribes:   make(map[string]bool),
-		lastPushTime: make(map[string]time.Time),
+		mu:         mu,
+		subscribes: make(map[string]bool),
 	}
 
 	frontendWSManager.register(ws, client)
@@ -93,17 +95,14 @@ func FrontendWSHandler(c *gin.Context) {
 
 	logs.Info("[FrontendWS] 客户端连接")
 
-	// 设置 pong 处理
 	ws.SetReadDeadline(time.Now().Add(wsPongWait))
 	ws.SetPongHandler(func(string) error {
 		ws.SetReadDeadline(time.Now().Add(wsPongWait))
 		return nil
 	})
 
-	// 启动 ping 协程
 	go frontendPingLoop(ws, mu)
 
-	// 读取消息循环
 	for {
 		_, message, err := ws.ReadMessage()
 		if err != nil {
@@ -154,23 +153,21 @@ func (m *FrontendWSManager) unregister(ws *websocket.Conn) {
 func (m *FrontendWSManager) handleMessage(ws *websocket.Conn, client *FrontendClient, msg *FrontendMessage) {
 	switch msg.Type {
 	case "subscribe":
-		// 订阅数据类型
 		if dataType, ok := msg.Data.(string); ok {
 			client.subscribes[dataType] = true
 			logs.Info("[FrontendWS] 订阅: %s", dataType)
-			// 立即推送一次数据
+			// 订阅时立即推一次全量
 			m.pushDataToClient(ws, client, dataType)
 		}
 
 	case "unsubscribe":
-		// 取消订阅
 		if dataType, ok := msg.Data.(string); ok {
 			delete(client.subscribes, dataType)
 			logs.Info("[FrontendWS] 取消订阅: %s", dataType)
 		}
 
 	case "request":
-		// 一次性请求数据
+		// 一次性拉取（首次加载用）
 		if dataType, ok := msg.Data.(string); ok {
 			m.pushDataToClient(ws, client, dataType)
 		}
@@ -180,24 +177,9 @@ func (m *FrontendWSManager) handleMessage(ws *websocket.Conn, client *FrontendCl
 	}
 }
 
+// pushDataToClient 推送数据给单个客户端（无条件推送）
 func (m *FrontendWSManager) pushDataToClient(ws *websocket.Conn, client *FrontendClient, dataType string) {
-	var data interface{}
-	var err error
-
-	switch dataType {
-	case "devices":
-		data, err = m.getDevicesWithLocal()
-	case "rpa_status":
-		data, err = m.getRpaStatus()
-	case "rpa_flows":
-		data, err = m.getRpaFlows()
-	case "server_status":
-		data, err = m.getServerStatus()
-	default:
-		logs.Warn("[FrontendWS] 未知数据类型: %s", dataType)
-		return
-	}
-
+	data, err := m.fetchData(dataType)
 	if err != nil {
 		logs.Error("[FrontendWS] 获取数据失败 [%s]: %v", dataType, err)
 		return
@@ -218,6 +200,28 @@ func (m *FrontendWSManager) pushDataToClient(ws *websocket.Conn, client *Fronten
 	}
 }
 
+// fetchData 根据类型获取数据
+func (m *FrontendWSManager) fetchData(dataType string) (interface{}, error) {
+	switch dataType {
+	case "devices":
+		return m.getDevicesWithLocal()
+	case "rpa_status":
+		return m.getRpaStatus()
+	case "rpa_flows":
+		return m.getRpaFlows()
+	case "server_status":
+		return m.getServerStatus()
+	default:
+		return nil, nil
+	}
+}
+
+// computeHash 计算数据的 SHA256 hash
+func computeHash(data interface{}) [32]byte {
+	b, _ := json.Marshal(data)
+	return sha256.Sum256(b)
+}
+
 // getDevicesWithLocal 获取带本地状态的设备列表
 func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 	core := GetJpyCore()
@@ -225,21 +229,17 @@ func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 		return []interface{}{}, nil
 	}
 
-	// 获取集控平台设备列表
 	devices := core.GetAllDevice()
 
-	// 获取所有 RPA 状态
 	rpaStatuses, _ := rpa.GetEngine().GetAllDeviceStatus()
 	rpaMap := make(map[int]*rpa.EngineStatus)
 	for i := range rpaStatuses {
 		rpaMap[rpaStatuses[i].DeviceID] = &rpaStatuses[i]
 	}
 
-	// 合并数据
 	result := make([]map[string]interface{}, 0, len(devices))
 	for _, d := range devices {
 		item := map[string]interface{}{
-			// 集控平台原生字段
 			"deviceId":            d.DeviceId,
 			"serialno":            d.MiddleAgentDevice.Uuid,
 			"online":              d.MiddleAgentDevice.Online,
@@ -248,9 +248,8 @@ func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 			"middleAgentDevice":   d.MiddleAgentDevice,
 		}
 
-		// 注入本地 RPA 状态
 		if status, ok := rpaMap[int(d.DeviceId)]; ok {
-			item["_local"] = &LocalDeviceState{
+			local := &LocalDeviceState{
 				RpaRunning:     status.Status == "running",
 				RpaID:          status.RpaID,
 				RpaName:        status.RpaName,
@@ -262,7 +261,13 @@ func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 				RpaLastError:   status.LastError,
 				RpaSubStep:     status.SubStep,
 				RpaSubStepName: status.SubStepName,
+				RpaTotalTime:   status.TotalTime,
 			}
+			if status.LoopStartAt != nil {
+				t := status.LoopStartAt.Format(time.RFC3339)
+				local.RpaLoopStartAt = &t
+			}
+			item["_local"] = local
 		}
 
 		result = append(result, item)
@@ -271,19 +276,14 @@ func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 	return result, nil
 }
 
-// getRpaStatus 获取所有 RPA 状态
 func (m *FrontendWSManager) getRpaStatus() (interface{}, error) {
 	return rpa.GetEngine().GetAllDeviceStatus()
 }
 
-// getRpaFlows 获取所有 RPA 流程
 func (m *FrontendWSManager) getRpaFlows() (interface{}, error) {
-	// 这里需要调用 database 获取
-	// 暂时返回空，后续补充
 	return []interface{}{}, nil
 }
 
-// getServerStatus 获取服务器连接状态
 func (m *FrontendWSManager) getServerStatus() (interface{}, error) {
 	host := GetCurrentHost()
 	isConnected := GetJpyCore() != nil && GetGlobalApi() != nil
@@ -294,12 +294,12 @@ func (m *FrontendWSManager) getServerStatus() (interface{}, error) {
 	}, nil
 }
 
-// BroadcastToFrontend 广播数据到所有前端客户端
+// BroadcastToFrontend 广播数据到所有前端客户端（外部主动触发）
 func BroadcastToFrontend(dataType string, data interface{}) {
-	frontendWSManager.broadcast(dataType, data)
+	frontendWSManager.broadcastData(dataType, data)
 }
 
-func (m *FrontendWSManager) broadcast(dataType string, data interface{}) {
+func (m *FrontendWSManager) broadcastData(dataType string, data interface{}) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
@@ -310,7 +310,6 @@ func (m *FrontendWSManager) broadcast(dataType string, data interface{}) {
 	}
 
 	for ws, client := range m.clients {
-		// 只推送给订阅了该类型的客户端
 		if !client.subscribes[dataType] {
 			continue
 		}
@@ -325,70 +324,60 @@ func (m *FrontendWSManager) broadcast(dataType string, data interface{}) {
 	}
 }
 
-// StartFrontendPushLoop 启动前端数据推送循环
+// StartFrontendPushLoop 启动变化检测循环（按需推送）
 func StartFrontendPushLoop() {
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
-			frontendWSManager.pushToSubscribers()
+			frontendWSManager.checkAndPush()
 		}
 	}()
 
-	logger.LogInfo("[FrontendWS] 推送循环已启动")
+	logger.LogInfo("[FrontendWS] 变化检测循环已启动")
 }
 
-func (m *FrontendWSManager) pushToSubscribers() {
+// checkAndPush 检测数据变化，有变化才推送
+func (m *FrontendWSManager) checkAndPush() {
 	m.lock.RLock()
-	defer m.lock.RUnlock()
-
 	if len(m.clients) == 0 {
+		m.lock.RUnlock()
 		return
 	}
 
-	// 收集需要推送的数据类型
-	needPush := make(map[string]bool)
+	// 收集所有订阅的数据类型
+	needCheck := make(map[string]bool)
 	for _, client := range m.clients {
 		for dataType := range client.subscribes {
-			needPush[dataType] = true
+			needCheck[dataType] = true
 		}
 	}
+	m.lock.RUnlock()
 
-	// 获取数据并推送
-	for dataType := range needPush {
-		var data interface{}
-		var err error
-
-		switch dataType {
-		case "devices":
-			data, err = m.getDevicesWithLocal()
-		case "rpa_status":
-			data, err = m.getRpaStatus()
-		default:
-			continue
-		}
-
+	// 逐个类型检测变化
+	for dataType := range needCheck {
+		data, err := m.fetchData(dataType)
 		if err != nil {
 			continue
 		}
 
-		push := FrontendPush{
-			Type: dataType,
-			Data: data,
-			Time: time.Now().UnixMilli(),
+		newHash := computeHash(data)
+
+		// 对比 hash
+		m.hashLock.Lock()
+		oldHash, exists := m.lastHashes[dataType]
+		changed := !exists || newHash != oldHash
+		if changed {
+			m.lastHashes[dataType] = newHash
+		}
+		m.hashLock.Unlock()
+
+		if !changed {
+			continue
 		}
 
-		for ws, client := range m.clients {
-			if !client.subscribes[dataType] {
-				continue
-			}
-
-			go func(w *websocket.Conn, c *FrontendClient) {
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				w.WriteJSON(push)
-			}(ws, client)
-		}
+		// 有变化，推送给所有订阅者
+		m.broadcastData(dataType, data)
 	}
 }
