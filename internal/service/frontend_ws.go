@@ -237,12 +237,24 @@ func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 		rpaMap[rpaStatuses[i].DeviceID] = &rpaStatuses[i]
 	}
 
+	// 获取本地 WS 连接的设备列表，用于判断 wsConnected
+	wsConnectedSet := make(map[string]bool)
+	if wsServer := GetDeviceWSServer(); wsServer != nil {
+		for _, dc := range wsServer.GetManager().GetAll() {
+			if dc.Serialno != "" {
+				wsConnectedSet[dc.Serialno] = true
+			}
+		}
+	}
+
 	result := make([]map[string]interface{}, 0, len(devices))
 	for _, d := range devices {
+		uuid := d.MiddleAgentDevice.Uuid
 		item := map[string]interface{}{
 			"deviceId":            d.DeviceId,
-			"serialno":            d.MiddleAgentDevice.Uuid,
+			"serialno":            uuid,
 			"online":              d.MiddleAgentDevice.Online,
+			"wsConnected":         wsConnectedSet[uuid],
 			"deviceInfo":          d.DeviceInfo,
 			"tbYunJiUserDeviceId": d.TBYunJiUserDeviceId,
 			"middleAgentDevice":   d.MiddleAgentDevice,
@@ -380,4 +392,33 @@ func (m *FrontendWSManager) checkAndPush() {
 		// 有变化，推送给所有订阅者
 		m.broadcastData(dataType, data)
 	}
+}
+
+// IsDeviceWSConnected 判断指定设备ID是否有本地WS连接
+// 通过云平台设备列表拿到 UUID(serialno)，再到 DeviceWSServer 匹配
+func IsDeviceWSConnected(deviceID int) bool {
+	uuid := GetDeviceUUID(deviceID)
+	if uuid == "" {
+		return false
+	}
+	wsServer := GetDeviceWSServer()
+	if wsServer == nil {
+		return false
+	}
+	_, ok := wsServer.GetManager().GetBySerialNo(uuid)
+	return ok
+}
+
+// GetDeviceUUID 通过设备ID获取设备的 UUID(serialno)
+func GetDeviceUUID(deviceID int) string {
+	core := GetJpyCore()
+	if core == nil {
+		return ""
+	}
+	for _, d := range core.GetAllDevice() {
+		if int(d.DeviceId) == deviceID {
+			return d.MiddleAgentDevice.Uuid
+		}
+	}
+	return ""
 }

@@ -150,7 +150,7 @@ func (s *ExecuteRepoScriptStep) pushScript(deviceID int, params map[string]inter
 	}
 
 	// 获取设备的 UUID
-	deviceUUID := getDeviceUUID(deviceID)
+	deviceUUID := service.GetDeviceUUID(deviceID)
 	if deviceUUID == "" {
 		return rpa.StepResult{
 			Completed: true,
