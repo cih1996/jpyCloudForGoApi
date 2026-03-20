@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ghp3000/logs"
+	"port-mapping-demo/pkg/logger"
 )
 
 // 配置常量
@@ -92,7 +92,7 @@ func (dm *DeviceManager) Start() {
 	dm.wg.Add(1)
 	go dm.cleanupLoop()
 
-	logs.Info("[DeviceWS] 设备管理器已启动")
+	logger.DeviceWSInfo("设备管理器已启动")
 }
 
 // Stop 停止管理器
@@ -107,7 +107,7 @@ func (dm *DeviceManager) Stop() {
 	// 关闭所有连接
 	dm.CloseAll()
 
-	logs.Info("[DeviceWS] 设备管理器已停止")
+	logger.DeviceWSInfo("设备管理器已停止")
 }
 
 // cleanupLoop 清理循环（检测超时连接）
@@ -146,12 +146,12 @@ func (dm *DeviceManager) cleanupTimeoutConnections() {
 
 	// 移除超时连接
 	for _, dc := range toRemove {
-		logs.Info("[DeviceWS] 设备 %08X (%s) 心跳超时，断开连接", dc.DeviceID, dc.Serialno)
+		logger.DeviceWSInfo("设备 %08X (%s) 心跳超时，断开连接", dc.DeviceID, dc.Serialno)
 		dm.Remove(dc.DeviceID)
 	}
 
 	if len(toRemove) > 0 {
-		logs.Info("[DeviceWS] 清理了 %d 个超时连接，当前连接数: %d", len(toRemove), dm.Count())
+		logger.DeviceWSInfo("清理了 %d 个超时连接，当前连接数: %d", len(toRemove), dm.Count())
 	}
 }
 

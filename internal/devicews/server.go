@@ -3,9 +3,9 @@ package devicews
 import (
 	"encoding/json"
 	"net/http"
+	"port-mapping-demo/pkg/logger"
 	"time"
 
-	"github.com/ghp3000/logs"
 	"github.com/gorilla/websocket"
 )
 
@@ -55,22 +55,22 @@ func (s *Server) registerDefaultHandlers() {
 				// 如果设备尚未通过 INIT 注册（兼容模式），用心跳补充身份
 				if dc.Serialno == "" && hb.Serialno != "" {
 					dc.Serialno = hb.Serialno
-					logs.Info("[DeviceWS] 设备身份已通过心跳补充: %08X (%s)", dc.DeviceID, dc.Serialno)
+					logger.DeviceWSInfo("设备身份已通过心跳补充: %08X (%s)", dc.DeviceID, dc.Serialno)
 				}
 			}
 		}
 		if err := dc.SendHeartbeatAck(packet.Header.SeqNo); err != nil {
-			logs.Warn("[DeviceWS] 发送心跳ACK失败: %08X, err: %v", dc.DeviceID, err)
+			logger.DeviceWSWarn("发送心跳ACK失败: %08X, err: %v", dc.DeviceID, err)
 		}
 	}
 
 	// INIT 处理（兼容：心跳首包注册后，APK 补发 INIT 更新设备信息）
 	s.handlers[MsgInit] = func(dc *DeviceConn, packet *Packet) {
 		if err := dc.HandleInit(packet); err != nil {
-			logs.Warn("[DeviceWS] 处理延迟 INIT 失败: %08X, err: %v", dc.DeviceID, err)
+			logger.DeviceWSWarn("处理延迟 INIT 失败: %08X, err: %v", dc.DeviceID, err)
 			return
 		}
-		logs.Info("[DeviceWS] 设备信息已更新(延迟INIT): %08X (%s), brand=%s, model=%s",
+		logger.DeviceWSInfo("设备信息已更新(延迟INIT): %08X (%s), brand=%s, model=%s",
 			dc.DeviceID, dc.Serialno, dc.Info.Brand, dc.Info.Model)
 		// 回复 INIT_ACK
 		config := map[string]interface{}{
@@ -86,7 +86,7 @@ func (s *Server) registerDefaultHandlers() {
 			var payload StatusReportPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
 				dc.State = DeviceState(payload.State)
-				logs.Debug("[DeviceWS] 设备 %08X 状态: %s, 任务: %s", dc.DeviceID, payload.State, payload.CurrentTask)
+				logger.DeviceWSDebug("设备 %08X 状态: %s, 任务: %s", dc.DeviceID, payload.State, payload.CurrentTask)
 			}
 		}
 	}
@@ -96,7 +96,7 @@ func (s *Server) registerDefaultHandlers() {
 		if packet.Header.DataFormat == FormatJSON {
 			var payload LogReportPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
-				logs.Debug("[DeviceWS] 设备 %08X 日志 [%s][%s]: %s", dc.DeviceID, payload.Level, payload.Tag, payload.Message)
+				logger.DeviceWSDebug("设备 %08X 日志 [%s][%s]: %s", dc.DeviceID, payload.Level, payload.Tag, payload.Message)
 			}
 		}
 	}
@@ -106,7 +106,7 @@ func (s *Server) registerDefaultHandlers() {
 		if packet.Header.DataFormat == FormatJSON {
 			var payload TaskResultPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
-				logs.Info("[DeviceWS] 设备 %08X 任务结果: taskId=%s, success=%v, duration=%dms",
+				logger.DeviceWSInfo("设备 %08X 任务结果: taskId=%s, success=%v, duration=%dms",
 					dc.DeviceID, payload.TaskID, payload.Success, payload.Duration)
 				// 存储任务结果
 				dc.StoreTaskResult(&payload)
@@ -117,18 +117,18 @@ func (s *Server) registerDefaultHandlers() {
 	// 进度上报
 	s.handlers[MsgProgressReport] = func(dc *DeviceConn, packet *Packet) {
 		// 可以转发给前端或记录
-		logs.Debug("[DeviceWS] 设备 %08X 进度上报: %s", dc.DeviceID, string(packet.Payload))
+		logger.DeviceWSDebug("设备 %08X 进度上报: %s", dc.DeviceID, string(packet.Payload))
 	}
 
 	// 脚本拉取请求
 	s.handlers[MsgScriptPull] = func(dc *DeviceConn, packet *Packet) {
-		logs.Debug("[DeviceWS] 设备 %08X 请求拉取脚本: %s", dc.DeviceID, string(packet.Payload))
+		logger.DeviceWSDebug("设备 %08X 请求拉取脚本: %s", dc.DeviceID, string(packet.Payload))
 		// TODO: 从脚本库获取脚本并发送
 	}
 
 	// 资源拉取请求
 	s.handlers[MsgResourcePull] = func(dc *DeviceConn, packet *Packet) {
-		logs.Debug("[DeviceWS] 设备 %08X 请求拉取资源: %s", dc.DeviceID, string(packet.Payload))
+		logger.DeviceWSDebug("设备 %08X 请求拉取资源: %s", dc.DeviceID, string(packet.Payload))
 		// TODO: 从资源库获取资源并发送
 	}
 
@@ -137,14 +137,14 @@ func (s *Server) registerDefaultHandlers() {
 		if packet.Header.DataFormat == FormatJSON {
 			var payload ScreenshotDataPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
-				logs.Debug("[DeviceWS] 设备 %08X 上传截图: %dx%d, 数据大小: %d bytes",
+				logger.DeviceWSDebug("设备 %08X 上传截图: %dx%d, 数据大小: %d bytes",
 					dc.DeviceID, payload.Width, payload.Height, len(payload.Data))
 				dc.StoreScreenshot(&payload)
 			} else {
-				logs.Warn("[DeviceWS] 设备 %08X 截图数据解析失败: %v", dc.DeviceID, err)
+				logger.DeviceWSWarn("设备 %08X 截图数据解析失败: %v", dc.DeviceID, err)
 			}
 		} else {
-			logs.Warn("[DeviceWS] 设备 %08X 截图数据格式错误, 期望 JSON", dc.DeviceID)
+			logger.DeviceWSWarn("设备 %08X 截图数据格式错误, 期望 JSON", dc.DeviceID)
 		}
 	}
 
@@ -153,14 +153,14 @@ func (s *Server) registerDefaultHandlers() {
 		if packet.Header.DataFormat == FormatJSON {
 			var payload NodesDataPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
-				logs.Debug("[DeviceWS] 设备 %08X 上传节点信息: requestId=%s",
+				logger.DeviceWSDebug("设备 %08X 上传节点信息: requestId=%s",
 					dc.DeviceID, payload.RequestID)
 				dc.StoreNodes(&payload)
 			} else {
-				logs.Warn("[DeviceWS] 设备 %08X 节点数据解析失败: %v", dc.DeviceID, err)
+				logger.DeviceWSWarn("设备 %08X 节点数据解析失败: %v", dc.DeviceID, err)
 			}
 		} else {
-			logs.Warn("[DeviceWS] 设备 %08X 节点数据格式错误, 期望 JSON", dc.DeviceID)
+			logger.DeviceWSWarn("设备 %08X 节点数据格式错误, 期望 JSON", dc.DeviceID)
 		}
 	}
 
@@ -169,7 +169,7 @@ func (s *Server) registerDefaultHandlers() {
 		if packet.Header.DataFormat == FormatJSON {
 			var payload DebugResultPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
-				logs.Info("[DeviceWS] 设备 %08X 调试结果: debugId=%s, success=%v, duration=%dms",
+				logger.DeviceWSInfo("设备 %08X 调试结果: debugId=%s, success=%v, duration=%dms",
 					dc.DeviceID, payload.DebugID, payload.Success, payload.Duration)
 				// 存储调试结果
 				dc.StoreDebugResult(&payload)
@@ -194,7 +194,7 @@ func (s *Server) Start() error {
 
 	http.HandleFunc("/ws/device", s.handleConnection)
 
-	logs.Info("[DeviceWS] 设备 WebSocket 服务启动: %s/ws/device", s.addr)
+	logger.DeviceWSInfo("设备 WebSocket 服务启动: %s/ws/device", s.addr)
 	return http.ListenAndServe(s.addr, nil)
 }
 
@@ -202,7 +202,7 @@ func (s *Server) Start() error {
 func (s *Server) StartWithMux(mux *http.ServeMux, path string) {
 	s.manager.Start()
 	mux.HandleFunc(path, s.handleConnection)
-	logs.Info("[DeviceWS] 设备 WebSocket 服务注册: %s", path)
+	logger.DeviceWSInfo("设备 WebSocket 服务注册: %s", path)
 }
 
 // Stop 停止服务器
@@ -214,20 +214,20 @@ func (s *Server) Stop() {
 func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		logs.Error("[DeviceWS] WebSocket 升级失败: %v", err)
+		logger.DeviceWSError("WebSocket 升级失败: %v", err)
 		return
 	}
 
 	dc := NewDeviceConn(conn)
 	clientIP := r.RemoteAddr
 
-	logs.Debug("[DeviceWS] 新连接: %s", clientIP)
+	logger.DeviceWSDebug("新连接: %s", clientIP)
 
 	// 等待首包（3秒超时，避免垃圾连接）
 	conn.SetReadDeadline(time.Now().Add(InitTimeout))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
-		logs.Warn("[DeviceWS] 等待首包超时或读取失败: %s, err: %v", clientIP, err)
+		logger.DeviceWSWarn("等待首包超时或读取失败: %s, err: %v", clientIP, err)
 		conn.Close()
 		return
 	}
@@ -235,7 +235,7 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 	// 解析数据包
 	packet, err := ParsePacket(data)
 	if err != nil {
-		logs.Warn("[DeviceWS] 解析数据包失败: %s, err: %v", clientIP, err)
+		logger.DeviceWSWarn("解析数据包失败: %s, err: %v", clientIP, err)
 		conn.Close()
 		return
 	}
@@ -249,16 +249,16 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 	case MsgInit:
 		// 标准流程：首包是 INIT
 		if err := dc.HandleInit(packet); err != nil {
-			logs.Warn("[DeviceWS] 处理 INIT 失败: %s, err: %v", clientIP, err)
+				logger.DeviceWSWarn("处理 INIT 失败: %s, err: %v", clientIP, err)
 			conn.Close()
 			return
 		}
 		s.manager.Add(dc)
-		logs.Info("[DeviceWS] 设备注册成功(INIT): %08X (%s), brand=%s, model=%s, version=%s",
+		logger.DeviceWSInfo("设备注册成功(INIT): %08X (%s), brand=%s, model=%s, version=%s",
 			dc.DeviceID, dc.Serialno, dc.Info.Brand, dc.Info.Model, dc.Info.Version)
 
 		if err := dc.SendInitAck(true, config); err != nil {
-			logs.Error("[DeviceWS] 发送 INIT_ACK 失败: %v", err)
+			logger.DeviceWSError("发送 INIT_ACK 失败: %v", err)
 			s.manager.Remove(dc.DeviceID)
 			return
 		}
@@ -283,24 +283,24 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 			if resolved := s.SerialnoResolver(dc.DeviceID); resolved != "" {
 				dc.Serialno = resolved
 				dc.Info.Serialno = resolved
-				logs.Info("[DeviceWS] 设备身份已通过反查补全: %08X → %s", dc.DeviceID, resolved)
+				logger.DeviceWSInfo("设备身份已通过反查补全: %08X → %s", dc.DeviceID, resolved)
 			}
 		}
 
 		s.manager.Add(dc)
 		if dc.Serialno != "" {
-			logs.Info("[DeviceWS] 设备注册成功(心跳兼容): %08X (%s), ip=%s", dc.DeviceID, dc.Serialno, clientIP)
+			logger.DeviceWSInfo("设备注册成功(心跳兼容): %08X (%s), ip=%s", dc.DeviceID, dc.Serialno, clientIP)
 		} else {
-			logs.Warn("[DeviceWS] 设备注册成功(心跳兼容): %08X, ip=%s (Serialno为空，WS状态可能异常)", dc.DeviceID, clientIP)
+			logger.DeviceWSWarn("设备注册成功(心跳兼容): %08X, ip=%s (Serialno为空，WS状态可能异常)", dc.DeviceID, clientIP)
 		}
 
 		// 回复心跳 ACK
 		if err := dc.SendHeartbeatAck(packet.Header.SeqNo); err != nil {
-			logs.Warn("[DeviceWS] 发送首包心跳ACK失败: %08X, err: %v", dc.DeviceID, err)
+			logger.DeviceWSWarn("发送首包心跳ACK失败: %08X, err: %v", dc.DeviceID, err)
 		}
 
 	default:
-		logs.Warn("[DeviceWS] 首包类型不支持: %s, msgType: 0x%02X", clientIP, packet.Header.MsgType)
+		logger.DeviceWSWarn("首包类型不支持: %s, msgType: 0x%02X", clientIP, packet.Header.MsgType)
 		conn.Close()
 		return
 	}
@@ -313,7 +313,7 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 
 	// 连接断开，移除设备
 	s.manager.Remove(dc.DeviceID)
-	logs.Info("[DeviceWS] 设备断开: %08X (%s)", dc.DeviceID, dc.Serialno)
+	logger.DeviceWSInfo("设备断开: %08X (%s)", dc.DeviceID, dc.Serialno)
 }
 
 // messageLoop 消息处理循环
@@ -322,7 +322,7 @@ func (s *Server) messageLoop(dc *DeviceConn) {
 		_, data, err := dc.Conn.ReadMessage()
 		if err != nil {
 			if !dc.IsClosed() {
-				logs.Debug("[DeviceWS] 读取消息失败: %08X, err: %v", dc.DeviceID, err)
+				logger.DeviceWSDebug("读取消息失败: %08X, err: %v", dc.DeviceID, err)
 			}
 			return
 		}
@@ -334,19 +334,19 @@ func (s *Server) messageLoop(dc *DeviceConn) {
 		// 解析数据包
 		packet, err := ParsePacket(data)
 		if err != nil {
-			logs.Warn("[DeviceWS] 解析数据包失败: %08X, err: %v", dc.DeviceID, err)
+				logger.DeviceWSWarn("解析数据包失败: %08X, err: %v", dc.DeviceID, err)
 			continue
 		}
 
 		// 【调试日志】打印收到的所有消息
-		logs.Info("[DeviceWS] ← 收到消息: deviceId=%08X, msgType=0x%02X, dataFormat=0x%02X, payloadLen=%d",
+		logger.DeviceWSInfo("← 收到消息: deviceId=%08X, msgType=0x%02X, dataFormat=0x%02X, payloadLen=%d",
 			packet.Header.DeviceID, packet.Header.MsgType, packet.Header.DataFormat, len(packet.Payload))
 
 		// 调用处理器
 		if handler, ok := s.handlers[packet.Header.MsgType]; ok {
 			handler(dc, packet)
 		} else {
-			logs.Debug("[DeviceWS] 未知消息类型: %08X, msgType: 0x%02X", dc.DeviceID, packet.Header.MsgType)
+			logger.DeviceWSDebug("未知消息类型: %08X, msgType: 0x%02X", dc.DeviceID, packet.Header.MsgType)
 		}
 
 		// 调用全局消息回调

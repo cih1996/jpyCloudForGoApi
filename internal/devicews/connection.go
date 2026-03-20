@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ghp3000/logs"
+	"port-mapping-demo/pkg/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -177,7 +177,7 @@ func (dc *DeviceConn) SendCommand(cmd string, params map[string]interface{}) err
 		return err
 	}
 	// 【调试日志】打印发送的命令
-	logs.Info("[DeviceWS] → 发送命令: deviceId=%08X, msgType=0x%02X (COMMAND), cmd=%s, params=%v",
+	logger.DeviceWSInfo("→ 发送命令: deviceId=%08X, msgType=0x%02X (COMMAND), cmd=%s, params=%v",
 		dc.DeviceID, MsgCommand, cmd, params)
 	return dc.WritePacket(packet)
 }
@@ -198,7 +198,7 @@ func (dc *DeviceConn) SendDebugExec(debugID, code string, timeout int64) error {
 	if len(codePreview) > 100 {
 		codePreview = codePreview[:100] + "..."
 	}
-	logs.Info("[DeviceWS] → 发送调试执行: deviceId=%08X, msgType=0x%02X (DEBUG_EXEC), debugId=%s, code=%s",
+	logger.DeviceWSInfo("→ 发送调试执行: deviceId=%08X, msgType=0x%02X (DEBUG_EXEC), debugId=%s, code=%s",
 		dc.DeviceID, MsgDebugExec, debugID, codePreview)
 	return dc.WritePacket(packet)
 }
@@ -262,7 +262,7 @@ func (dc *DeviceConn) HandleInit(packet *Packet) error {
 
 	var payload InitPayload
 	if err := json.Unmarshal(packet.Payload, &payload); err != nil {
-		logs.Error("[DeviceWS] 解析初始化数据失败: %v", err)
+		logger.DeviceWSError("解析初始化数据失败: %v", err)
 		return err
 	}
 

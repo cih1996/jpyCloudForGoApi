@@ -568,6 +568,11 @@ func runServer() {
 		logs.Error("Failed to initialize unified logger: %v", err)
 	}
 
+	// Initialize DeviceWS Logger
+	if err := logger.InitDeviceWSLogger(); err != nil {
+		logs.Error("Failed to initialize devicews logger: %v", err)
+	}
+
 	// Initialize Database
 	if err := database.Init("./data"); err != nil {
 		logs.Error("Failed to initialize database: %v", err)
@@ -635,6 +640,9 @@ func runServer() {
 	r.POST("/api/file/fast-upload", service.HandleFastUpload)
 	r.POST("/api/file/upload", service.HandleFileUpload)
 	r.POST("/api/file/delete", service.HandleFileDelete)
+
+	// Log Query API
+	r.GET("/api/logs/query", service.HandleLogQuery)
 
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))
