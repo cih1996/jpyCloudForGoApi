@@ -120,8 +120,10 @@ RPA 命令行工具
 步骤管理:
   step list <rpa_id>             列出 RPA 的所有步骤
   step add <rpa_id> --type <类型> --name <名称> [--params <JSON>]  添加步骤
+  step edit <rpa_id> <index> [--name <名称>] [--set key=value] [--unset key] [--params <JSON>]  编辑步骤
   step remove <rpa_id> <index>   删除步骤（index 从 0 开始）
   step move <rpa_id> <from> <to> 移动步骤位置
+  step types                     查看所有可用步骤类型
 
 执行控制:
   run <rpa_id> --device <device_id> [--mode single|loop]  执行 RPA
@@ -130,21 +132,21 @@ RPA 命令行工具
   history [--device <device_id>] [--limit <n>]  查看执行历史
 
 步骤类型:
-  shell          执行 Shell 命令
-  start_bot      启动脚本
-  change_os      改机重启
-  download_url   下载安装应用
-  set_proxy      设置代理
-  set_location   设置定位
-  get_root       获取 Root 权限
-  http_request   HTTP 请求
-  condition      条件判断
-  set_variables  设置变量
+  change_os_and_wait   改机重启        set_proxy_and_wait  设置代理
+  set_location         设置定位        install_app_and_wait 安装应用
+  get_root             应用提权        network_check       网络检测
+  download_url         URL下载         download_cloud      云端下载
+  http_request         HTTP请求        shell               Shell命令
+  start_bot            启动脚本        run_script          执行脚本
+  execute_repo_script  仓库脚本        set_variables       设置变量
+  condition_check      条件判断
 
 示例:
   jpy-cloud rpa list
   jpy-cloud rpa create --name "自动化测试"
   jpy-cloud rpa step add 1 --type shell --name "清理缓存" --params '{"command":"rm -rf /data/cache/*"}'
+  jpy-cloud rpa step edit 1 0 --set command="ls -la"
+  jpy-cloud rpa step types
   jpy-cloud rpa run 1 --device 12345678
   jpy-cloud rpa status --device 12345678
   jpy-cloud rpa history --limit 10
@@ -415,10 +417,14 @@ func rpaStep(args []string) {
 		rpaStepList(subArgs)
 	case "add":
 		rpaStepAdd(subArgs)
+	case "edit", "set":
+		rpaStepEdit(subArgs)
 	case "remove", "rm":
 		rpaStepRemove(subArgs)
 	case "move", "mv":
 		rpaStepMove(subArgs)
+	case "types":
+		rpaStepTypes(subArgs)
 	default:
 		fmt.Printf("未知命令: rpa step %s\n", subCmd)
 	}
@@ -551,6 +557,185 @@ func rpaStepRemove(args []string) {
 	}
 
 	fmt.Printf("已删除步骤: %s (序号: %d)\n", removedStep.Name, index)
+}
+
+func rpaStepEdit(args []string) {
+	if len(args) < 2 {
+		fmt.Println(`用法: jpy-cloud rpa step edit <rpa_id> <index> [选项]
+
+选项:
+  --name <名称>         修改步骤名称
+  --type <类型>         修改步骤类型
+  --params <JSON>       替换整个参数（JSON 格式）
+  --set <key=value>     修改单个参数（可多次使用）
+  --unset <key>         删除单个参数
+
+示例:
+  jpy-cloud rpa step edit 1 0 --name "新名称"
+  jpy-cloud rpa step edit 1 2 --set targetUrl=ws://192.168.1.100:1003/ws/device
+  jpy-cloud rpa step edit 1 2 --set maxRetries=30 --set retryInterval=5
+  jpy-cloud rpa step edit 1 0 --params '{"command":"ls -la","outputVar":"result"}'
+  jpy-cloud rpa step edit 1 3 --unset deviceName`)
+		return
+	}
+
+	rpaID := args[0]
+	index, err := strconv.Atoi(args[1])
+	if err != nil {
+		fmt.Printf("无效的序号: %s\n", args[1])
+		return
+	}
+
+	// 获取当前流程
+	var flow RpaFlow
+	if err := rpaGet("/flows/"+rpaID, &flow); err != nil {
+		fmt.Printf("获取 RPA 失败: %v\n", err)
+		return
+	}
+
+	if index < 0 || index >= len(flow.Steps) {
+		fmt.Printf("序号超出范围: %d (共 %d 个步骤)\n", index, len(flow.Steps))
+		return
+	}
+
+	step := &flow.Steps[index]
+	changed := false
+
+	// --name
+	if name := getFlagValue(args[2:], "--name"); name != "" {
+		step.Name = name
+		changed = true
+	}
+
+	// --type
+	if stepType := getFlagValue(args[2:], "--type"); stepType != "" {
+		step.Type = stepType
+		changed = true
+	}
+
+	// --params（替换整个参数）
+	if paramsStr := getFlagValue(args[2:], "--params"); paramsStr != "" {
+		var params map[string]interface{}
+		if err := json.Unmarshal([]byte(paramsStr), &params); err != nil {
+			fmt.Printf("参数 JSON 格式错误: %v\n", err)
+			return
+		}
+		step.Params = params
+		changed = true
+	}
+
+	// --set key=value（可多次出现）
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--set" && i+1 < len(args) {
+			kv := args[i+1]
+			eqIdx := strings.Index(kv, "=")
+			if eqIdx <= 0 {
+				fmt.Printf("无效的 --set 格式: %s（应为 key=value）\n", kv)
+				return
+			}
+			key := kv[:eqIdx]
+			value := kv[eqIdx+1:]
+
+			// 尝试解析为数字或布尔
+			if step.Params == nil {
+				step.Params = make(map[string]interface{})
+			}
+			step.Params[key] = parseValue(value)
+			changed = true
+			i++ // 跳过 value
+		}
+	}
+
+	// --unset key（可多次出现）
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--unset" && i+1 < len(args) {
+			key := args[i+1]
+			delete(step.Params, key)
+			changed = true
+			i++
+		}
+	}
+
+	if !changed {
+		fmt.Println("未指定任何修改项，使用 --name/--type/--params/--set/--unset")
+		return
+	}
+
+	// 更新流程
+	if err := rpaPut("/flows/"+rpaID, flow, nil); err != nil {
+		fmt.Printf("保存失败: %v\n", err)
+		return
+	}
+
+	paramsJSON, _ := json.Marshal(step.Params)
+	fmt.Printf("已更新步骤 [%d] %s (%s)\n", index, step.Name, step.Type)
+	fmt.Printf("  参数: %s\n", string(paramsJSON))
+}
+
+// parseValue 尝试将字符串解析为合适的类型
+func parseValue(s string) interface{} {
+	// 布尔
+	if s == "true" {
+		return true
+	}
+	if s == "false" {
+		return false
+	}
+	// 整数
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	// 浮点数
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	// JSON 对象/数组
+	if (strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
+		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) {
+		var v interface{}
+		if json.Unmarshal([]byte(s), &v) == nil {
+			return v
+		}
+	}
+	// 字符串
+	return s
+}
+
+// StepTypeInfo 步骤类型信息
+type StepTypeInfo struct {
+	Type     string   `json:"type"`
+	Name     string   `json:"name"`
+	SubSteps []string `json:"subSteps"`
+}
+
+func rpaStepTypes(args []string) {
+	jsonOutput := containsFlag(args, "--json")
+
+	var types []StepTypeInfo
+	if err := rpaGet("/step-types", &types); err != nil {
+		fmt.Printf("获取步骤类型失败: %v\n", err)
+		return
+	}
+
+	if jsonOutput {
+		OutputJSON(types)
+		return
+	}
+
+	if len(types) == 0 {
+		fmt.Println("暂无步骤类型")
+		return
+	}
+
+	fmt.Printf("%-25s %-15s %s\n", "类型标识", "名称", "子步骤")
+	fmt.Println(strings.Repeat("-", 70))
+	for _, t := range types {
+		subSteps := "-"
+		if len(t.SubSteps) > 0 {
+			subSteps = strings.Join(t.SubSteps, " → ")
+		}
+		fmt.Printf("%-25s %-15s %s\n", t.Type, t.Name, subSteps)
+	}
 }
 
 func rpaStepMove(args []string) {
