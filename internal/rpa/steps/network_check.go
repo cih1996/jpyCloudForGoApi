@@ -12,7 +12,7 @@ import (
 )
 
 // NetworkCheckStep 网络检测步骤
-// 改机重启后检测设备网络是否可达目标地址
+// 改机重启后检测设备是否能访问目标网址（HTTP 可达性）
 type NetworkCheckStep struct{}
 
 func init() {
@@ -34,11 +34,12 @@ func (s *NetworkCheckStep) SubSteps() []string {
 func (s *NetworkCheckStep) Execute(deviceID int, params map[string]interface{}, subStep int, ctx database.StepContext) rpa.StepResult {
 	targetUrl, _ := params["targetUrl"].(string)
 	if targetUrl == "" {
-		return rpa.StepResult{
-			Completed: true,
-			Success:   false,
-			Error:     "缺少必要参数: targetUrl（目标地址）",
-		}
+		targetUrl = "https://www.baidu.com"
+	}
+
+	// 自动补协议
+	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
+		targetUrl = "https://" + targetUrl
 	}
 
 	// 重试参数
@@ -51,23 +52,15 @@ func (s *NetworkCheckStep) Execute(deviceID int, params map[string]interface{}, 
 		retryInterval = int(ri)
 	}
 
-	// 从 URL 中提取 host:port 用于检测
-	// 支持 ws://host:port/path 和 http://host:port/path 格式
-	host := extractHost(targetUrl)
-	if host == "" {
-		return rpa.StepResult{
-			Completed: true,
-			Success:   false,
-			Error:     fmt.Sprintf("无法从 URL 中提取主机地址: %s", targetUrl),
-		}
-	}
-
-	logger.LogInfo("[RPA] 设备 %d 开始网络检测, 目标: %s (host=%s), 最多重试 %d 次", deviceID, targetUrl, host, maxRetries)
+	logger.LogInfo("[RPA] 设备 %d 开始网络检测, 目标: %s, 最多重试 %d 次", deviceID, targetUrl, maxRetries)
 
 	for i := 1; i <= maxRetries; i++ {
-		// 用 nc (netcat) 检测端口连通性，超时 3 秒
-		// 如果没有 nc，退回用 ping 检测
-		shellCmd := fmt.Sprintf("nc -z -w 3 %s && echo NETWORK_OK || echo NETWORK_FAIL", host)
+		// 用 curl 检测 HTTP 可达性，超时 5 秒
+		// 返回 HTTP 状态码，2xx/3xx 算成功
+		shellCmd := fmt.Sprintf(
+			`curl -s -o /dev/null -w "%%{http_code}" --connect-timeout 5 --max-time 10 "%s"`,
+			targetUrl,
+		)
 
 		req := &service.UnifiedRequest{
 			Type: "execShell",
@@ -85,14 +78,15 @@ func (s *NetworkCheckStep) Execute(deviceID int, params map[string]interface{}, 
 			dataStr := fmt.Sprintf("%v", res.Data)
 			logger.LogInfo("[RPA] 设备 %d 网络检测 %d/%d: code=%d data=[%s]", deviceID, i, maxRetries, res.Code, dataStr)
 
-			if res.Code == 200 && strings.Contains(dataStr, "NETWORK_OK") {
-				logger.LogInfo("[RPA] 设备 %d 网络检测通过（第%d次）, 目标: %s", deviceID, i, host)
+			// curl 返回的 HTTP 状态码在 data 中，检查是否为 2xx 或 3xx
+			if res.Code == 200 && isHTTPSuccess(dataStr) {
+				logger.LogInfo("[RPA] 设备 %d 网络检测通过（第%d次）, 目标: %s", deviceID, i, targetUrl)
 				return rpa.StepResult{
 					Completed: true,
 					Success:   true,
 					Output: map[string]interface{}{
 						"targetUrl":  targetUrl,
-						"host":       host,
+						"httpCode":   strings.TrimSpace(dataStr),
 						"retryCount": i,
 					},
 				}
@@ -107,30 +101,19 @@ func (s *NetworkCheckStep) Execute(deviceID int, params map[string]interface{}, 
 	return rpa.StepResult{
 		Completed: true,
 		Success:   false,
-		Error:     fmt.Sprintf("网络检测超时: 设备无法连接 %s（重试 %d 次）", host, maxRetries),
+		Error:     fmt.Sprintf("网络检测超时: 设备无法访问 %s（重试 %d 次）", targetUrl, maxRetries),
 	}
 }
 
-// extractHost 从 URL 中提取 host port 部分，返回 "host port" 格式（nc 命令用空格分隔）
-func extractHost(rawUrl string) string {
-	// 去掉协议前缀
-	u := rawUrl
-	for _, prefix := range []string{"ws://", "wss://", "http://", "https://"} {
-		if strings.HasPrefix(u, prefix) {
-			u = u[len(prefix):]
-			break
+// isHTTPSuccess 检查 curl 返回的数据中是否包含 2xx 或 3xx 状态码
+func isHTTPSuccess(dataStr string) bool {
+	// curl -w "%{http_code}" 返回的是纯数字如 "200"、"301" 等
+	// 但经过中间件返回后可能包含其他内容，所以用 Contains 匹配
+	successCodes := []string{"200", "201", "202", "204", "301", "302", "303", "304", "307", "308"}
+	for _, code := range successCodes {
+		if strings.Contains(dataStr, code) {
+			return true
 		}
 	}
-	// 去掉路径
-	if idx := strings.Index(u, "/"); idx >= 0 {
-		u = u[:idx]
-	}
-	// 分离 host 和 port
-	if idx := strings.LastIndex(u, ":"); idx >= 0 {
-		host := u[:idx]
-		port := u[idx+1:]
-		return host + " " + port
-	}
-	// 没有端口，返回空（nc 需要端口）
-	return ""
+	return false
 }
