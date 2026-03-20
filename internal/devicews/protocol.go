@@ -133,6 +133,13 @@ type InitPayload struct {
 	State          string `json:"state"`
 }
 
+// HeartbeatPayload 心跳包的 payload 结构（新协议：心跳携带设备身份）
+type HeartbeatPayload struct {
+	Serialno  string `json:"serialno"`
+	DeviceID  uint32 `json:"deviceId"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // InitAckPayload 初始化响应的 payload 结构
 type InitAckPayload struct {
 	Success    bool                   `json:"success"`

@@ -43,9 +43,36 @@ func NewServer(addr string) *Server {
 
 // registerDefaultHandlers 注册默认消息处理器
 func (s *Server) registerDefaultHandlers() {
-	// 心跳处理
+	// 心跳处理（新协议：心跳携带 JSON 设备身份信息）
 	s.handlers[MsgHeartbeat] = func(dc *DeviceConn, packet *Packet) {
+		// 解析心跳 payload（兼容旧协议空 payload）
+		if packet.Header.DataFormat == FormatJSON && len(packet.Payload) > 0 {
+			var hb HeartbeatPayload
+			if err := json.Unmarshal(packet.Payload, &hb); err == nil {
+				// 如果设备尚未通过 INIT 注册（兼容模式），用心跳补充身份
+				if dc.Serialno == "" && hb.Serialno != "" {
+					dc.Serialno = hb.Serialno
+					logs.Info("[DeviceWS] 设备身份已通过心跳补充: %08X (%s)", dc.DeviceID, dc.Serialno)
+				}
+			}
+		}
 		dc.SendHeartbeatAck(packet.Header.SeqNo)
+	}
+
+	// INIT 处理（兼容：心跳首包注册后，APK 补发 INIT 更新设备信息）
+	s.handlers[MsgInit] = func(dc *DeviceConn, packet *Packet) {
+		if err := dc.HandleInit(packet); err != nil {
+			logs.Warn("[DeviceWS] 处理延迟 INIT 失败: %08X, err: %v", dc.DeviceID, err)
+			return
+		}
+		logs.Info("[DeviceWS] 设备信息已更新(延迟INIT): %08X (%s), brand=%s, model=%s",
+			dc.DeviceID, dc.Serialno, dc.Info.Brand, dc.Info.Model)
+		// 回复 INIT_ACK
+		config := map[string]interface{}{
+			"heartbeatInterval": int(HeartbeatInterval / time.Millisecond),
+			"taskTimeout":       300000,
+		}
+		dc.SendInitAck(true, config)
 	}
 
 	// 状态上报
@@ -191,11 +218,11 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 
 	logs.Debug("[DeviceWS] 新连接: %s", clientIP)
 
-	// 等待 INIT 包（3秒超时，避免垃圾连接）
+	// 等待首包（3秒超时，避免垃圾连接）
 	conn.SetReadDeadline(time.Now().Add(InitTimeout))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
-		logs.Warn("[DeviceWS] 等待 INIT 超时或读取失败: %s, err: %v", clientIP, err)
+		logs.Warn("[DeviceWS] 等待首包超时或读取失败: %s, err: %v", clientIP, err)
 		conn.Close()
 		return
 	}
@@ -208,34 +235,57 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 必须是 INIT 包
-	if packet.Header.MsgType != MsgInit {
-		logs.Warn("[DeviceWS] 首包不是 INIT: %s, msgType: 0x%02X", clientIP, packet.Header.MsgType)
-		conn.Close()
-		return
-	}
-
-	// 处理初始化
-	if err := dc.HandleInit(packet); err != nil {
-		logs.Warn("[DeviceWS] 处理 INIT 失败: %s, err: %v", clientIP, err)
-		conn.Close()
-		return
-	}
-
-	// 注册设备
-	s.manager.Add(dc)
-
-	logs.Info("[DeviceWS] 设备注册成功: %08X (%s), brand=%s, model=%s, version=%s",
-		dc.DeviceID, dc.Serialno, dc.Info.Brand, dc.Info.Model, dc.Info.Version)
-
-	// 发送 INIT_ACK
 	config := map[string]interface{}{
 		"heartbeatInterval": int(HeartbeatInterval / time.Millisecond),
 		"taskTimeout":       300000,
 	}
-	if err := dc.SendInitAck(true, config); err != nil {
-		logs.Error("[DeviceWS] 发送 INIT_ACK 失败: %v", err)
-		s.manager.Remove(dc.DeviceID)
+
+	switch packet.Header.MsgType {
+	case MsgInit:
+		// 标准流程：首包是 INIT
+		if err := dc.HandleInit(packet); err != nil {
+			logs.Warn("[DeviceWS] 处理 INIT 失败: %s, err: %v", clientIP, err)
+			conn.Close()
+			return
+		}
+		s.manager.Add(dc)
+		logs.Info("[DeviceWS] 设备注册成功(INIT): %08X (%s), brand=%s, model=%s, version=%s",
+			dc.DeviceID, dc.Serialno, dc.Info.Brand, dc.Info.Model, dc.Info.Version)
+
+		if err := dc.SendInitAck(true, config); err != nil {
+			logs.Error("[DeviceWS] 发送 INIT_ACK 失败: %v", err)
+			s.manager.Remove(dc.DeviceID)
+			return
+		}
+
+	case MsgHeartbeat:
+		// 兼容模式：APK 首包是心跳（未实现 INIT 握手）
+		// 从协议头提取 DeviceID
+		dc.DeviceID = packet.Header.DeviceID
+		dc.Info = &DeviceInfo{}
+
+		// 新协议：心跳携带 JSON 身份信息，尝试提取 serialno
+		if packet.Header.DataFormat == FormatJSON && len(packet.Payload) > 0 {
+			var hb HeartbeatPayload
+			if err := json.Unmarshal(packet.Payload, &hb); err == nil {
+				dc.Serialno = hb.Serialno
+				dc.Info.Serialno = hb.Serialno
+			}
+		}
+
+		s.manager.Add(dc)
+		if dc.Serialno != "" {
+			logs.Info("[DeviceWS] 设备注册成功(心跳兼容): %08X (%s), ip=%s", dc.DeviceID, dc.Serialno, clientIP)
+		} else {
+			logs.Info("[DeviceWS] 设备注册成功(心跳兼容): %08X, ip=%s", dc.DeviceID, clientIP)
+		}
+
+		// 回复心跳 ACK
+		dc.SendHeartbeatAck(packet.Header.SeqNo)
+
+	default:
+		logs.Warn("[DeviceWS] 首包类型不支持: %s, msgType: 0x%02X", clientIP, packet.Header.MsgType)
+		conn.Close()
 		return
 	}
 
