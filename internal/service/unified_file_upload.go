@@ -69,7 +69,22 @@ func HandleFileUpload(c *gin.Context) {
 
 	logger.LogInfo("[FileUpload] Upload start: hash=%s, fileName=%s", hash, fileName)
 
-	// 2. 获取 COS 预签名上传 URL
+	// 2. 防御性秒传检测：避免重复hash直接调GetUploadUrl导致500
+	exists, errPkg := GetGlobalApi().TbFileCtl.FastUpload(tbFileCtl.FastUploadReq{
+		Hash:     &hash,
+		FileName: &fileName,
+	})
+	if errPkg == nil && exists {
+		logger.LogInfo("[FileUpload] File already exists (fast-upload hit), skip upload")
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "文件已存在（秒传命中）", "data": gin.H{
+			"hash":     hash,
+			"fileName": fileName,
+			"fast":     true,
+		}})
+		return
+	}
+
+	// 3. 获取 COS 预签名上传 URL
 	cosUrl, errPkg := GetGlobalApi().TbFileCtl.GetUploadUrl(tbFileCtl.GetUploadUrlReq{
 		Hash:     &hash,
 		FileName: &fileName,
