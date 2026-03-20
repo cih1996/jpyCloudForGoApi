@@ -721,6 +721,11 @@ func runServer() {
 		go service.NotifyDevicesChanged()
 	})
 
+	// 注入 Serialno 反查器：心跳首包注册时通过 DeviceID 反查云平台 UUID
+	deviceServer.SerialnoResolver = func(deviceID uint32) string {
+		return service.GetDeviceUUID(int(deviceID))
+	}
+
 	service.SetDeviceWSServer(deviceServer)
 
 	go func() {

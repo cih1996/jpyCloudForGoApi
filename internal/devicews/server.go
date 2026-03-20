@@ -17,6 +17,9 @@ type Server struct {
 
 	// 消息处理器
 	handlers map[uint8]MessageHandler
+
+	// SerialnoResolver 通过 DeviceID 反查设备序列号（由外部注入，避免循环依赖）
+	SerialnoResolver func(deviceID uint32) string
 }
 
 // MessageHandler 消息处理器类型
@@ -56,7 +59,9 @@ func (s *Server) registerDefaultHandlers() {
 				}
 			}
 		}
-		dc.SendHeartbeatAck(packet.Header.SeqNo)
+		if err := dc.SendHeartbeatAck(packet.Header.SeqNo); err != nil {
+			logs.Warn("[DeviceWS] 发送心跳ACK失败: %08X, err: %v", dc.DeviceID, err)
+		}
 	}
 
 	// INIT 处理（兼容：心跳首包注册后，APK 补发 INIT 更新设备信息）
@@ -273,15 +278,26 @@ func (s *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Serialno 为空时，通过 DeviceID 反查云平台 UUID 补全
+		if dc.Serialno == "" && s.SerialnoResolver != nil {
+			if resolved := s.SerialnoResolver(dc.DeviceID); resolved != "" {
+				dc.Serialno = resolved
+				dc.Info.Serialno = resolved
+				logs.Info("[DeviceWS] 设备身份已通过反查补全: %08X → %s", dc.DeviceID, resolved)
+			}
+		}
+
 		s.manager.Add(dc)
 		if dc.Serialno != "" {
 			logs.Info("[DeviceWS] 设备注册成功(心跳兼容): %08X (%s), ip=%s", dc.DeviceID, dc.Serialno, clientIP)
 		} else {
-			logs.Info("[DeviceWS] 设备注册成功(心跳兼容): %08X, ip=%s", dc.DeviceID, clientIP)
+			logs.Warn("[DeviceWS] 设备注册成功(心跳兼容): %08X, ip=%s (Serialno为空，WS状态可能异常)", dc.DeviceID, clientIP)
 		}
 
 		// 回复心跳 ACK
-		dc.SendHeartbeatAck(packet.Header.SeqNo)
+		if err := dc.SendHeartbeatAck(packet.Header.SeqNo); err != nil {
+			logs.Warn("[DeviceWS] 发送首包心跳ACK失败: %08X, err: %v", dc.DeviceID, err)
+		}
 
 	default:
 		logs.Warn("[DeviceWS] 首包类型不支持: %s, msgType: 0x%02X", clientIP, packet.Header.MsgType)
