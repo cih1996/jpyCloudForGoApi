@@ -70,6 +70,21 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 		}
 	}
 
+	// TD-008: 截断过大的日志文件（executor.log 是 append 模式，长时间运行会膨胀）
+	truncLogReq := &service.UnifiedRequest{
+		Type: "execShell",
+		Data: map[string]interface{}{
+			"deviceId": float64(deviceID),
+			"shell":    "[ $(stat -c%s /sdcard/accbot/executor.log 2>/dev/null || echo 0) -gt 1048576 ] && echo '' > /sdcard/accbot/executor.log && echo TRUNCATED || echo SKIP",
+		},
+	}
+	truncRes, _ := service.HandleUnifiedRequestHTTP(context.Background(), truncLogReq)
+	if truncRes != nil && truncRes.Code == 200 && truncRes.Data != nil {
+		if strings.Contains(fmt.Sprintf("%v", truncRes.Data), "TRUNCATED") {
+			logger.LogInfo("[RPA] 设备 %d executor.log 超过1MB，已截断", deviceID)
+		}
+	}
+
 	// 检查 accSys 源文件是否存在（改机重装后 APK 未启动过，assets 未解压）
 	accSysSource := fmt.Sprintf("/sdcard/Android/data/%s/cache/assets/sys/accSys", packageName)
 	checkFileReq := &service.UnifiedRequest{
