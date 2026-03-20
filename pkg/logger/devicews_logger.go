@@ -6,28 +6,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ghp3000/logs"
-)
-
-const (
-	deviceWSLogFile    = "devicews.log"
-	deviceWSLogDir     = "logs"
-	deviceWSMaxSize    = 5 * 1024 * 1024 // 5MB
-	deviceWSMaxBackups = 5
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var (
-	dwsMu          sync.Mutex
+	dwsWriter      *lumberjack.Logger
 	dwsBroadcaster func(string)
 )
 
-// InitDeviceWSLogger 初始化 DeviceWS 专用日志
+// InitDeviceWSLogger 初始化 DeviceWS 专用日志（使用 lumberjack 轮转）
 func InitDeviceWSLogger() error {
-	if err := os.MkdirAll(deviceWSLogDir, 0755); err != nil {
+	if err := os.MkdirAll("logs", 0755); err != nil {
 		return fmt.Errorf("创建日志目录失败: %v", err)
+	}
+
+	dwsWriter = &lumberjack.Logger{
+		Filename:   "logs/devicews.log",
+		MaxSize:    5,  // MB
+		MaxBackups: 5,
+		MaxAge:     30, // 天
+		Compress:   false,
 	}
 	return nil
 }
@@ -66,56 +67,24 @@ func DeviceWSDebug(format string, v ...interface{}) {
 }
 
 func writeDeviceWSLog(level, msg string) {
-	dwsMu.Lock()
-	defer dwsMu.Unlock()
-
-	logPath := filepath.Join(deviceWSLogDir, deviceWSLogFile)
-
-	// 检查是否需要轮转
-	rotateIfNeeded(logPath)
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
+	if dwsWriter == nil {
 		return
 	}
-	defer f.Close()
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
 	logLine := fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, msg)
 
-	f.WriteString(logLine)
+	dwsWriter.Write([]byte(logLine))
 
 	if dwsBroadcaster != nil {
 		dwsBroadcaster(logLine)
 	}
 }
 
-// rotateIfNeeded 检查文件大小，超过阈值则轮转
-func rotateIfNeeded(logPath string) {
-	info, err := os.Stat(logPath)
-	if err != nil || info.Size() < deviceWSMaxSize {
-		return
-	}
-
-	// 删除最老的备份
-	oldest := fmt.Sprintf("%s.%d", logPath, deviceWSMaxBackups)
-	os.Remove(oldest)
-
-	// 依次重命名: .4 → .5, .3 → .4, ...
-	for i := deviceWSMaxBackups - 1; i >= 1; i-- {
-		src := fmt.Sprintf("%s.%d", logPath, i)
-		dst := fmt.Sprintf("%s.%d", logPath, i+1)
-		os.Rename(src, dst)
-	}
-
-	// 当前文件 → .1
-	os.Rename(logPath, logPath+".1")
-}
-
 // QueryDeviceWSLogs 查询 DeviceWS 日志
 // lines: 返回行数，keyword: 过滤关键词（空则不过滤）
 func QueryDeviceWSLogs(lines int, keyword string) ([]string, error) {
-	logPath := filepath.Join(deviceWSLogDir, deviceWSLogFile)
+	logPath := filepath.Join("logs", "devicews.log")
 
 	f, err := os.Open(logPath)
 	if err != nil {
@@ -126,7 +95,6 @@ func QueryDeviceWSLogs(lines int, keyword string) ([]string, error) {
 	}
 	defer f.Close()
 
-	// 读取所有行（日志文件不会太大，5MB 以内）
 	var allLines []string
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -137,7 +105,6 @@ func QueryDeviceWSLogs(lines int, keyword string) ([]string, error) {
 		}
 	}
 
-	// 取最后 N 行
 	if lines > 0 && len(allLines) > lines {
 		allLines = allLines[len(allLines)-lines:]
 	}
