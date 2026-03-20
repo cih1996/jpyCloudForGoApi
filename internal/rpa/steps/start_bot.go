@@ -8,6 +8,7 @@ import (
 	"port-mapping-demo/internal/rpa"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/logger"
+	"strings"
 	"time"
 )
 
@@ -52,6 +53,42 @@ func (s *StartBotStep) Execute(deviceID int, params map[string]interface{}, subS
 	}
 }
 
+// probeShellChannel 探测 shell 通道是否真正可用
+// 改机重启后中间件到设备的通道可能还没恢复，命令返回200但设备不执行
+// 通过发送 echo PROBE_OK 并检查返回值来确认通道可用
+func (s *StartBotStep) probeShellChannel(deviceID int) bool {
+	maxProbes := 40 // 最多探测40次，每次间隔3秒，共120秒
+	for i := 1; i <= maxProbes; i++ {
+		req := &service.UnifiedRequest{
+			Type: "execShell",
+			Seq:  int(time.Now().UnixMilli()),
+			Data: map[string]interface{}{
+				"deviceId": float64(deviceID),
+				"shell":    "echo PROBE_OK",
+			},
+		}
+
+		res, err := service.HandleUnifiedRequestHTTP(context.Background(), req)
+		if err != nil {
+			logger.LogInfo("[RPA] 设备 %d shell探测 %d/%d 失败: %v", deviceID, i, maxProbes, err)
+		} else {
+			dataStr := fmt.Sprintf("%v", res.Data)
+			logger.LogInfo("[RPA] 设备 %d shell探测 %d/%d: code=%d data=[%s]", deviceID, i, maxProbes, res.Code, dataStr)
+			if strings.Contains(dataStr, "PROBE_OK") {
+				logger.LogInfo("[RPA] 设备 %d shell通道已就绪（第%d次探测）", deviceID, i)
+				return true
+			}
+		}
+
+		if i < maxProbes {
+			time.Sleep(3 * time.Second)
+		}
+	}
+
+	logger.LogInfo("[RPA] 设备 %d shell通道探测超时（%d次均未响应）", deviceID, maxProbes)
+	return false
+}
+
 // startAccSys 启动 accSys 服务
 func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, ctx database.StepContext) rpa.StepResult {
 	// 获取包名，默认 com.jpy.bot
@@ -60,15 +97,25 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 		packageName = "com.jpy.bot"
 	}
 
+	// 探测 shell 通道是否真正可用（改机重启后设备端 shell 服务可能还没就绪）
+	if !s.probeShellChannel(deviceID) {
+		return rpa.StepResult{
+			Completed: true,
+			Success:   false,
+			Error:     "shell通道探测超时，设备可能未就绪",
+		}
+	}
+
 	// 构建 shell 命令：复制 accSys 到 /data/local/tmp 并后台启动
 	shellCmd := fmt.Sprintf(
 		"cp /sdcard/Android/data/%s/cache/assets/sys/accSys /data/local/tmp/accSys && cd /data/local/tmp/ && chmod +x ./accSys && nohup ./accSys >./accSys.log 2>&1 &",
 		packageName,
 	)
 
+	// 通道已确认可用，发送实际命令
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().Unix()),
+		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    shellCmd,
@@ -78,7 +125,6 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 	logger.LogInfo("[RPA] 设备 %d 发送shell(startAccSys): %s", deviceID, shellCmd)
 	res, err := service.HandleUnifiedRequestHTTP(context.Background(), req)
 	if err != nil {
-		logger.LogInfo("[RPA] 设备 %d shell返回错误(startAccSys): %v", deviceID, err)
 		return rpa.StepResult{
 			Completed: true,
 			Success:   false,
@@ -86,7 +132,6 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 		}
 	}
 	logger.LogInfo("[RPA] 设备 %d shell返回(startAccSys): code=%d msg=%s data=%v", deviceID, res.Code, res.Msg, res.Data)
-
 	if res.Code != 200 {
 		return rpa.StepResult{
 			Completed: true,
@@ -95,7 +140,7 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 		}
 	}
 
-	logger.LogInfo("[RPA] 设备 %d 启动accSys成功，等待5秒...", deviceID)
+	logger.LogInfo("[RPA] 设备 %d 启动accSys完成，等待5秒...", deviceID)
 
 	// 等待 5 秒让 accSys 充分启动
 	time.Sleep(5 * time.Second)
@@ -160,7 +205,7 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 	// 执行 mkdir
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().Unix()),
+		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    mkdirCmd,
@@ -178,7 +223,7 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 	// 执行写入配置
 	req = &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().Unix()),
+		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    writeCmd,
@@ -229,9 +274,18 @@ func (s *StartBotStep) startTestFramework(deviceID int, params map[string]interf
 		packageName,
 	)
 
+	// 改机后连接不稳定，再次探测确认通道可用
+	if !s.probeShellChannel(deviceID) {
+		return rpa.StepResult{
+			Completed: true,
+			Success:   false,
+			Error:     "启动测试框架前shell通道探测超时",
+		}
+	}
+
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().Unix()),
+		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    shellCmd,
@@ -241,7 +295,6 @@ func (s *StartBotStep) startTestFramework(deviceID int, params map[string]interf
 	logger.LogInfo("[RPA] 设备 %d 发送shell(startTestFramework): %s", deviceID, shellCmd)
 	res, err := service.HandleUnifiedRequestHTTP(context.Background(), req)
 	if err != nil {
-		logger.LogInfo("[RPA] 设备 %d shell返回错误(startTestFramework): %v", deviceID, err)
 		return rpa.StepResult{
 			Completed: true,
 			Success:   false,
@@ -249,7 +302,6 @@ func (s *StartBotStep) startTestFramework(deviceID int, params map[string]interf
 		}
 	}
 	logger.LogInfo("[RPA] 设备 %d shell返回(startTestFramework): code=%d msg=%s data=%v", deviceID, res.Code, res.Msg, res.Data)
-
 	if res.Code != 200 {
 		return rpa.StepResult{
 			Completed: true,

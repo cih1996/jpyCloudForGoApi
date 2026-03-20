@@ -114,7 +114,9 @@ func SendGenericCommandToDevice(key string, deviceIds []DeviceCommandInfo, f uin
 			result, err = middleAgent.SyncGetOnlineList()
 		case 289: // 执行 Shell 命令
 			shell := extractStringField(data, "shell")
+			logger.LogInfo("[device_control] F=289 发送Shell: 设备=%d, 中间件=%d, Code=%d, shell=%s", d.DeviceId, middlewareId, middleAgent.Code, shell)
 			result, err = middleAgent.SyncShellCommand(d.DeviceId, shell)
+			logger.LogInfo("[device_control] F=289 Shell返回: 设备=%d, result=%s, err=%v", d.DeviceId, result, err)
 		case 290: // 获取应用列表
 			result, err = middleAgent.SyncGetAppList(d.DeviceId)
 		case 291: // 启动应用
