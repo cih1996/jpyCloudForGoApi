@@ -3,6 +3,7 @@ package service
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"port-mapping-demo/internal/rpa"
 	"port-mapping-demo/pkg/logger"
@@ -239,12 +240,15 @@ func (m *FrontendWSManager) getDevicesWithLocal() (interface{}, error) {
 
 	// 获取本地 WS 连接的设备列表，用于判断 wsConnected
 	wsConnectedSet := make(map[string]bool)
-	if wsServer := GetDeviceWSServer(); wsServer != nil {
+	wsServer := GetDeviceWSServer()
+	if wsServer != nil {
 		for _, dc := range wsServer.GetManager().GetAll() {
 			if dc.Serialno != "" {
 				wsConnectedSet[dc.Serialno] = true
 			}
 		}
+	} else {
+		logger.DeviceWSWarn("[WS匹配] GetDeviceWSServer() 返回 nil!")
 	}
 
 	result := make([]map[string]interface{}, 0, len(devices))
@@ -438,4 +442,56 @@ func GetDeviceUUID(deviceID int) string {
 		}
 	}
 	return ""
+}
+
+// HandleDebugWSMatch 诊断接口：实时查看 WS 匹配状态
+func HandleDebugWSMatch(c *gin.Context) {
+	// 1. DeviceWS 连接列表
+	wsConns := []map[string]interface{}{}
+	wsServer := GetDeviceWSServer()
+	if wsServer != nil {
+		for _, dc := range wsServer.GetManager().GetAll() {
+			wsConns = append(wsConns, map[string]interface{}{
+				"deviceId":    fmt.Sprintf("%08X", dc.DeviceID),
+				"serialno":    dc.Serialno,
+				"state":       dc.State,
+				"connectedAt": dc.ConnectedAt.Format("15:04:05"),
+				"lastSeen":    dc.LastSeen.Format("15:04:05"),
+			})
+		}
+	}
+
+	// 2. 云平台设备列表 + 匹配结果
+	cloudDevices := []map[string]interface{}{}
+	wsConnectedSet := make(map[string]bool)
+	for _, conn := range wsConns {
+		if sn, ok := conn["serialno"].(string); ok && sn != "" {
+			wsConnectedSet[sn] = true
+		}
+	}
+
+	core := GetJpyCore()
+	if core != nil {
+		for _, d := range core.GetAllDevice() {
+			uuid := d.MiddleAgentDevice.Uuid
+			cloudDevices = append(cloudDevices, map[string]interface{}{
+				"deviceId":    d.DeviceId,
+				"uuid":        uuid,
+				"online":      d.MiddleAgentDevice.Online,
+				"wsConnected": wsConnectedSet[uuid],
+				"matchDetail": fmt.Sprintf("uuid=%q in wsConnectedSet=%v → %v", uuid, wsConnectedSet, wsConnectedSet[uuid]),
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"wsServerNil":    wsServer == nil,
+			"wsConnections":  wsConns,
+			"wsConnectedSet": wsConnectedSet,
+			"cloudDevices":   cloudDevices,
+			"timestamp":      time.Now().Format("15:04:05.000"),
+		},
+	})
 }

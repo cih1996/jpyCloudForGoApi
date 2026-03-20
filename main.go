@@ -644,6 +644,9 @@ func runServer() {
 	// Log Query API
 	r.GET("/api/logs/query", service.HandleLogQuery)
 
+	// Debug / 诊断接口
+	r.GET("/api/debug/ws-match", service.HandleDebugWSMatch)
+
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))
 
