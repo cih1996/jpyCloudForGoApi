@@ -40,14 +40,14 @@ func APILogMiddleware() gin.HandlerFunc {
 		method := c.Request.Method
 		query := c.Request.URL.RawQuery
 
-		// 读取请求体（限制大小避免内存爆炸）
+		// 读取请求体（完整读取后放回，仅日志截断显示）
 		// 跳过 multipart/form-data（文件上传），读取会破坏流式 body
 		var reqBody string
 		contentType := c.GetHeader("Content-Type")
 		isMultipart := strings.HasPrefix(contentType, "multipart/")
 		if c.Request.Body != nil && (method == "POST" || method == "PUT") && !isMultipart {
-			bodyBytes, _ := io.ReadAll(io.LimitReader(c.Request.Body, 2048))
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			bodyBytes, _ := io.ReadAll(c.Request.Body)
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // 完整放回
 			reqBody = string(bodyBytes)
 			if len(reqBody) > 200 {
 				reqBody = reqBody[:200] + "..."

@@ -72,6 +72,8 @@ func main() {
 		cli.ScriptCommand(os.Args[2:])
 	case "debug":
 		cli.DebugCommand(os.Args[2:])
+	case "file":
+		cli.FileCommand(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Printf("jpy-cloud version %s (%s/%s)\n", VERSION, runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "--help":

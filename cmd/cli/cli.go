@@ -33,17 +33,18 @@ type UnifiedResponse struct {
 	Data interface{} `json:"data"`
 }
 
-// CallUnified 调用本地后端的统一 API
-// platformURL: 集控平台地址（用于登录）
-// apiKey: 集控平台 API 密钥
-// reqType: 请求类型
-// data: 请求数据
+// CallUnified 调用本地后端的统一 API（默认30s超时）
 func CallUnified(platformURL, apiKey, reqType string, data interface{}) (*UnifiedResponse, error) {
+	return CallUnifiedWithTimeout(platformURL, apiKey, reqType, data, 30*time.Second)
+}
+
+// CallUnifiedWithTimeout 调用本地后端的统一 API（自定义超时）
+func CallUnifiedWithTimeout(platformURL, apiKey, reqType string, data interface{}, timeout time.Duration) (*UnifiedResponse, error) {
 	url := LocalServerURL + "/api/unified"
 
 	reqBody := UnifiedRequest{
 		Type:  reqType,
-		Seq:   time.Now().UnixMilli(),
+		Seq:   0, // 由底层自动生成，避免 UnixMilli 溢出 uint32
 		Token: apiKey,
 		Host:  platformURL, // 集控平台地址
 		Data:  data,
@@ -54,7 +55,7 @@ func CallUnified(platformURL, apiKey, reqType string, data interface{}) (*Unifie
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("请求失败（本地服务是否已启动？）: %v", err)
@@ -599,10 +600,10 @@ func Screenshot(platformURL, apiKey, deviceID, output string) error {
 	var devID int
 	fmt.Sscanf(deviceID, "%d", &devID)
 
-	// 请求截图
-	result, err := CallUnified(platformURL, apiKey, "screenshot", map[string]interface{}{
+	// 请求截图（截图操作耗时较长，使用60s超时）
+	result, err := CallUnifiedWithTimeout(platformURL, apiKey, "screenshot", map[string]interface{}{
 		"deviceId": devID,
-	})
+	}, 60*time.Second)
 	if err != nil {
 		return err
 	}
