@@ -95,7 +95,7 @@ func QueryDeviceWSLogs(lines int, keyword string) ([]string, error) {
 	}
 	defer f.Close()
 
-	var allLines []string
+	allLines := make([]string, 0)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
