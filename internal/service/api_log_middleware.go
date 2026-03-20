@@ -41,8 +41,11 @@ func APILogMiddleware() gin.HandlerFunc {
 		query := c.Request.URL.RawQuery
 
 		// 读取请求体（限制大小避免内存爆炸）
+		// 跳过 multipart/form-data（文件上传），读取会破坏流式 body
 		var reqBody string
-		if c.Request.Body != nil && (method == "POST" || method == "PUT") {
+		contentType := c.GetHeader("Content-Type")
+		isMultipart := strings.HasPrefix(contentType, "multipart/")
+		if c.Request.Body != nil && (method == "POST" || method == "PUT") && !isMultipart {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(c.Request.Body, 2048))
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			reqBody = string(bodyBytes)
