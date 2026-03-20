@@ -64,6 +64,7 @@ type DeviceConn struct {
 	// 调试执行结果缓存
 	debugResults   map[string]*DebugResultPayload
 	debugResultsMu sync.RWMutex
+	lastDebugID    string // 最近一次下发的 debugId，用于兜底空 debugId 的设备返回
 }
 
 // DebugResultPayload 调试执行结果
@@ -198,6 +199,7 @@ func (dc *DeviceConn) SendDebugExec(debugID, code string, timeout int64) error {
 		Code:    code,
 		Timeout: timeout,
 	}
+	dc.lastDebugID = debugID // 记录最近下发的 debugId，用于兜底
 	seqNo := dc.NextSeqNo()
 	packet, err := BuildJSONPacket(MsgDebugExec, dc.DeviceID, seqNo, payload)
 	if err != nil {

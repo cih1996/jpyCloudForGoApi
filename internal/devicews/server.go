@@ -169,6 +169,12 @@ func (s *Server) registerDefaultHandlers() {
 		if packet.Header.DataFormat == FormatJSON {
 			var payload DebugResultPayload
 			if err := json.Unmarshal(packet.Payload, &payload); err == nil {
+				// Bug3 兜底：设备返回空 debugId 时，用最近一次下发的 debugId
+				if payload.DebugID == "" && dc.lastDebugID != "" {
+					logger.DeviceWSInfo("设备 %08X 调试结果 debugId 为空，使用最近下发的 debugId=%s",
+						dc.DeviceID, dc.lastDebugID)
+					payload.DebugID = dc.lastDebugID
+				}
 				logger.DeviceWSInfo("设备 %08X 调试结果: debugId=%s, success=%v, duration=%dms",
 					dc.DeviceID, payload.DebugID, payload.Success, payload.Duration)
 				// 存储调试结果
