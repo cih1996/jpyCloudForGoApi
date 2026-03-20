@@ -631,6 +631,10 @@ func runServer() {
 	// Frontend unified WebSocket (新架构：前端统一 WS 接口)
 	r.GET("/api/ws", service.FrontendWSHandler)
 
+	// File Upload Routes
+	r.POST("/api/file/fast-upload", service.HandleFastUpload)
+	r.POST("/api/file/upload", service.HandleFileUpload)
+
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))
 
