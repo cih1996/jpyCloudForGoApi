@@ -36,6 +36,8 @@ func (s *Server) RegisterAPIRoutes(group *gin.RouterGroup) {
 	group.POST("/broadcast/task", s.apiBroadcastTask)
 	// 广播命令
 	group.POST("/broadcast/command", s.apiBroadcastCommand)
+	// 推送资源到设备
+	group.POST("/devices/:deviceId/resource-push", s.apiResourcePush)
 	// 断开设备连接
 	group.DELETE("/devices/:deviceId", s.apiDisconnectDevice)
 }
@@ -421,6 +423,49 @@ func (s *Server) apiGetNodes(c *gin.Context) {
 			"timestamp": timestamp.UnixMilli(),
 		},
 	})
+}
+
+// apiResourcePush 推送资源到设备
+func (s *Server) apiResourcePush(c *gin.Context) {
+	deviceIDStr := c.Param("deviceId")
+	var deviceID uint32
+	if _, err := parseHexOrDec(deviceIDStr, &deviceID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "invalid deviceId"})
+		return
+	}
+
+	dc, ok := s.manager.Get(deviceID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "device not found"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name" binding:"required"`
+		Hash string `json:"hash" binding:"required"`
+		Data string `json:"data" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+
+	// base64 数据大小检查：50MB 原始文件 ≈ 67MB base64
+	const maxBase64Size = 67 * 1024 * 1024
+	if len(req.Data) > maxBase64Size {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code": 400,
+			"msg":  fmt.Sprintf("文件过大（base64 %dMB），当前限制 50MB 原始文件", len(req.Data)/1024/1024),
+		})
+		return
+	}
+
+	if err := dc.SendResourcePush(req.Name, req.Hash, req.Data); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "resource pushed"})
 }
 
 // apiGetDebugResult 获取调试执行结果
