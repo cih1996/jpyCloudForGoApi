@@ -75,7 +75,6 @@ func (s *InstallAppAndWaitStep) sendDownloadInstall(deviceID int, params map[str
 	// 通过 HandleUnifiedRequestHTTP 发送下载安装请求
 	req := &service.UnifiedRequest{
 		Type: "downLoadInstallApp",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"devices": []interface{}{float64(deviceID)},
 			"name":    name,
@@ -195,7 +194,6 @@ func (s *InstallAppAndWaitStep) waitDownloadComplete(deviceID int, ctx database.
 	logger.LogInfo("[RPA] 设备 %d 查询下载进度, taskId=%s", deviceID, taskIDStr)
 	req := &service.UnifiedRequest{
 		Type: "getDownloadProgress",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"id":       taskIDStr,
@@ -340,7 +338,6 @@ func (s *InstallAppAndWaitStep) waitInstallComplete(deviceID int, ctx database.S
 	logger.LogInfo("[RPA] 设备 %d 查询安装进度, taskId=%s", deviceID, taskIDStr)
 	req := &service.UnifiedRequest{
 		Type: "getDownloadProgress",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"id":       taskIDStr,

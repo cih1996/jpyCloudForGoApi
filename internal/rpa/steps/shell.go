@@ -7,7 +7,6 @@ import (
 	"port-mapping-demo/internal/rpa"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/logger"
-	"time"
 )
 
 // ShellStep 执行 Shell 命令步骤
@@ -41,7 +40,6 @@ func (s *ShellStep) Execute(deviceID int, params map[string]interface{}, subStep
 
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().Unix()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    command,

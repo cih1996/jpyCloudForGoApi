@@ -709,9 +709,11 @@ func runServer() {
 	// Start Device WebSocket Server
 	deviceServer.GetManager().SetOnConnect(func(dc *devicews.DeviceConn) {
 		logs.Info("[DeviceWS] 设备上线: %08X (%s)", dc.DeviceID, dc.Serialno)
+		go service.NotifyDevicesChanged()
 	})
 	deviceServer.GetManager().SetOnDisconnect(func(dc *devicews.DeviceConn) {
 		logs.Info("[DeviceWS] 设备离线: %08X (%s)", dc.DeviceID, dc.Serialno)
+		go service.NotifyDevicesChanged()
 	})
 
 	service.SetDeviceWSServer(deviceServer)

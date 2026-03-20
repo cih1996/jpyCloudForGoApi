@@ -8,6 +8,7 @@ import (
 	"port-mapping-demo/pkg/logger"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"adminApi/userDeviceCtl"
@@ -19,6 +20,19 @@ import (
 
 var unifiedKey string
 var deviceCache sync.Map // map[uint64]*DeviceCommandInfo
+
+// seqCounter 全局原子递增计数器，用于自动生成请求 Seq
+// 初始值基于当前秒级时间戳，保证重启后不重复
+var seqCounter = func() *atomic.Int64 {
+	c := &atomic.Int64{}
+	c.Store(time.Now().Unix())
+	return c
+}()
+
+// nextSeq 生成下一个唯一 Seq 值
+func nextSeq() int {
+	return int(seqCounter.Add(1))
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -249,6 +263,12 @@ func HandleUnifiedRequestHTTP(ctx context.Context, req *UnifiedRequest) (*Unifie
 
 // HandleUnifiedRequest handles all incoming unified requests
 func HandleUnifiedRequest(ctx context.Context, req *UnifiedRequest, ws *websocket.Conn) (*UnifiedResponse, error) {
+	// SEQ 自动生成：调用方无需手动填 Seq，底层统一分配
+	// Seq=0 时自动生成，非0保留（兼容外部调用）
+	if req.Seq == 0 {
+		req.Seq = nextSeq()
+	}
+
 	res := &UnifiedResponse{
 		Type: req.Type,
 		Seq:  req.Seq,

@@ -112,7 +112,6 @@ func (s *DownloadCloudStep) sendDownloads(deviceID int, params map[string]interf
 
 		req := &service.UnifiedRequest{
 			Type: "downLoadInstallApp",
-			Seq:  int(time.Now().UnixNano() % 1000000),
 			Data: map[string]interface{}{
 				"devices": []interface{}{float64(deviceID)},
 				"url":     file.URL,
@@ -241,7 +240,6 @@ func (s *DownloadCloudStep) waitComplete(deviceID int, params map[string]interfa
 		taskIDStr := fmt.Sprintf("%v", taskID)
 		req := &service.UnifiedRequest{
 			Type: "getDownloadProgress",
-			Seq:  int(time.Now().UnixNano() % 1000000),
 			Data: map[string]interface{}{
 				"deviceId": float64(deviceID),
 				"id":       taskIDStr,
@@ -360,7 +358,6 @@ func (s *DownloadCloudStep) postProcess(deviceID int, params map[string]interfac
 
 			req := &service.UnifiedRequest{
 				Type: "execShell",
-				Seq:  int(time.Now().UnixNano() % 1000000),
 				Data: map[string]interface{}{
 					"deviceId": float64(deviceID),
 					"shell":    mvCmd,
@@ -383,7 +380,6 @@ func (s *DownloadCloudStep) postProcess(deviceID int, params map[string]interfac
 
 			req := &service.UnifiedRequest{
 				Type: "execShell",
-				Seq:  int(time.Now().UnixNano() % 1000000),
 				Data: map[string]interface{}{
 					"deviceId": float64(deviceID),
 					"shell":    chmodCmd,

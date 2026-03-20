@@ -7,7 +7,6 @@ import (
 	"port-mapping-demo/internal/rpa"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/logger"
-	"time"
 )
 
 // GetRootStep 应用提权步骤
@@ -53,7 +52,6 @@ func (s *GetRootStep) sendGetRoot(deviceID int, params map[string]interface{}) r
 
 	req := &service.UnifiedRequest{
 		Type: "getRoot",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"pkg":      packageName,

@@ -90,7 +90,6 @@ func (s *ChangeOsAndWaitStep) sendChangeOs(deviceID int, params map[string]inter
 	// 通过 HandleUnifiedRequestHTTP 发送改机请求
 	req := &service.UnifiedRequest{
 		Type: "Changephones",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Req:  true,
 		Data: []map[string]interface{}{changeData},
 	}
@@ -189,7 +188,6 @@ func (s *ChangeOsAndWaitStep) waitChangeOsComplete(deviceID int, ctx database.St
 	logger.LogInfo("[RPA] 设备 %d 查询改机状态, taskId=%d", deviceID, taskID)
 	req := &service.UnifiedRequest{
 		Type: "getTaskStatus",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"tbChangeOsIds": []int64{int64(taskID)},
 		},

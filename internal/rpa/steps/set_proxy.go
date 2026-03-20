@@ -74,7 +74,6 @@ func (s *SetProxyAndWaitStep) setProxy(deviceID int, params map[string]interface
 
 	req := &service.UnifiedRequest{
 		Type: "setSocket5",
-		Seq:  int(time.Now().Unix()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"s5Url":    s5Url,

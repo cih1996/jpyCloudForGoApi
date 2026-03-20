@@ -9,7 +9,6 @@ import (
 	"port-mapping-demo/internal/rpa"
 	"port-mapping-demo/internal/service"
 	"port-mapping-demo/pkg/logger"
-	"time"
 )
 
 // SetLocationStep 设置定位步骤
@@ -55,7 +54,6 @@ func (s *SetLocationStep) Execute(deviceID int, params map[string]interface{}, s
 
 	req := &service.UnifiedRequest{
 		Type: "setLocation",
-		Seq:  int(time.Now().Unix()),
 		Data: []map[string]interface{}{
 			{
 				"deviceId": float64(deviceID),

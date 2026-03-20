@@ -65,7 +65,6 @@ func (s *DownloadUrlStep) sendDownload(deviceID int, params map[string]interface
 	// 使用 unified 接口发送下载命令（install=false 表示只下载不安装）
 	req := &service.UnifiedRequest{
 		Type: "downLoadInstallApp",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"devices": []interface{}{float64(deviceID)},
 			"url":     url,
@@ -160,7 +159,6 @@ func (s *DownloadUrlStep) waitComplete(deviceID int, ctx database.StepContext) r
 
 	req := &service.UnifiedRequest{
 		Type: "getDownloadProgress",
-		Seq:  int(time.Now().UnixNano() % 1000000),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"id":       taskIDStr,

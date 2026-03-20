@@ -350,6 +350,23 @@ func StartFrontendPushLoop() {
 	logger.LogInfo("[FrontendWS] 变化检测循环已启动")
 }
 
+// NotifyDevicesChanged 设备上线/离线时主动推送设备列表
+func NotifyDevicesChanged() {
+	// 短暂延迟，等 manager 完成 Add/Remove
+	time.Sleep(200 * time.Millisecond)
+	data, err := frontendWSManager.getDevicesWithLocal()
+	if err != nil {
+		return
+	}
+	// 更新 hash 并广播
+	newHash := computeHash(data)
+	frontendWSManager.hashLock.Lock()
+	frontendWSManager.lastHashes["devices"] = newHash
+	frontendWSManager.hashLock.Unlock()
+
+	frontendWSManager.broadcastData("devices", data)
+}
+
 // checkAndPush 检测数据变化，有变化才推送
 func (m *FrontendWSManager) checkAndPush() {
 	m.lock.RLock()

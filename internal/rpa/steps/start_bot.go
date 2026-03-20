@@ -53,42 +53,6 @@ func (s *StartBotStep) Execute(deviceID int, params map[string]interface{}, subS
 	}
 }
 
-// probeShellChannel 探测 shell 通道是否真正可用
-// 改机重启后中间件到设备的通道可能还没恢复，命令返回200但设备不执行
-// 通过发送 echo PROBE_OK 并检查返回值来确认通道可用
-func (s *StartBotStep) probeShellChannel(deviceID int) bool {
-	maxProbes := 40 // 最多探测40次，每次间隔3秒，共120秒
-	for i := 1; i <= maxProbes; i++ {
-		req := &service.UnifiedRequest{
-			Type: "execShell",
-			Seq:  int(time.Now().UnixMilli()),
-			Data: map[string]interface{}{
-				"deviceId": float64(deviceID),
-				"shell":    "echo PROBE_OK",
-			},
-		}
-
-		res, err := service.HandleUnifiedRequestHTTP(context.Background(), req)
-		if err != nil {
-			logger.LogInfo("[RPA] 设备 %d shell探测 %d/%d 失败: %v", deviceID, i, maxProbes, err)
-		} else {
-			dataStr := fmt.Sprintf("%v", res.Data)
-			logger.LogInfo("[RPA] 设备 %d shell探测 %d/%d: code=%d data=[%s]", deviceID, i, maxProbes, res.Code, dataStr)
-			if strings.Contains(dataStr, "PROBE_OK") {
-				logger.LogInfo("[RPA] 设备 %d shell通道已就绪（第%d次探测）", deviceID, i)
-				return true
-			}
-		}
-
-		if i < maxProbes {
-			time.Sleep(3 * time.Second)
-		}
-	}
-
-	logger.LogInfo("[RPA] 设备 %d shell通道探测超时（%d次均未响应）", deviceID, maxProbes)
-	return false
-}
-
 // startAccSys 启动 accSys 服务
 func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, ctx database.StepContext) rpa.StepResult {
 	// 获取包名，默认 com.jpy.bot
@@ -98,7 +62,7 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 	}
 
 	// 探测 shell 通道是否真正可用（改机重启后设备端 shell 服务可能还没就绪）
-	if !s.probeShellChannel(deviceID) {
+	if !ProbeShellChannel(deviceID, 0, 0) {
 		return rpa.StepResult{
 			Completed: true,
 			Success:   false,
@@ -106,16 +70,87 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 		}
 	}
 
-	// 构建 shell 命令：复制 accSys 到 /data/local/tmp 并后台启动
+	// 检查 accSys 源文件是否存在（改机重装后 APK 未启动过，assets 未解压）
+	accSysSource := fmt.Sprintf("/sdcard/Android/data/%s/cache/assets/sys/accSys", packageName)
+	checkFileReq := &service.UnifiedRequest{
+		Type: "execShell",
+		Data: map[string]interface{}{
+			"deviceId": float64(deviceID),
+			"shell":    fmt.Sprintf("ls -l %s 2>&1", accSysSource),
+		},
+	}
+	checkFileRes, _ := service.HandleUnifiedRequestHTTP(context.Background(), checkFileReq)
+	fileExists := false
+	if checkFileRes != nil && checkFileRes.Code == 200 && checkFileRes.Data != nil {
+		dataStr := fmt.Sprintf("%v", checkFileRes.Data)
+		if !strings.Contains(dataStr, "No such file") && strings.Contains(dataStr, "accSys") {
+			fileExists = true
+		}
+	}
+
+	if !fileExists {
+		// 源文件不存在，先拉起 APK 触发 assets 解压
+		logger.LogInfo("[RPA] 设备 %d accSys源文件不存在，先启动APK触发解压...", deviceID)
+		launchReq := &service.UnifiedRequest{
+			Type: "execShell",
+			Data: map[string]interface{}{
+				"deviceId": float64(deviceID),
+				"shell":    fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1 2>/dev/null", packageName),
+			},
+		}
+		service.HandleUnifiedRequestHTTP(context.Background(), launchReq)
+
+		// 轮询等待 accSys 文件出现（最多60秒，每3秒检查一次）
+		maxWait := 20
+		found := false
+		for i := 1; i <= maxWait; i++ {
+			time.Sleep(3 * time.Second)
+			pollReq := &service.UnifiedRequest{
+				Type: "execShell",
+				Data: map[string]interface{}{
+					"deviceId": float64(deviceID),
+					"shell":    fmt.Sprintf("ls %s 2>/dev/null && echo FILE_OK", accSysSource),
+				},
+			}
+			pollRes, pollErr := service.HandleUnifiedRequestHTTP(context.Background(), pollReq)
+			if pollErr == nil && pollRes.Code == 200 && pollRes.Data != nil {
+				if strings.Contains(fmt.Sprintf("%v", pollRes.Data), "FILE_OK") {
+					found = true
+					logger.LogInfo("[RPA] 设备 %d accSys源文件已就绪（等待%d秒）", deviceID, i*3)
+					break
+				}
+			}
+			logger.LogInfo("[RPA] 设备 %d 等待accSys解压... (%d/%d)", deviceID, i, maxWait)
+		}
+		if !found {
+			return rpa.StepResult{
+				Completed: true,
+				Success:   false,
+				Error:     fmt.Sprintf("等待accSys源文件超时（60秒），APK可能未正确安装: %s", accSysSource),
+			}
+		}
+
+		// 解压完成后关闭 APK（避免干扰后续 am instrument）
+		stopReq := &service.UnifiedRequest{
+			Type: "execShell",
+			Data: map[string]interface{}{
+				"deviceId": float64(deviceID),
+				"shell":    fmt.Sprintf("am force-stop %s", packageName),
+			},
+		}
+		service.HandleUnifiedRequestHTTP(context.Background(), stopReq)
+		time.Sleep(1 * time.Second)
+	}
+
+	// 确保 /data 可写，复制 accSys 到 /data/local/tmp 并后台启动
 	shellCmd := fmt.Sprintf(
-		"cp /sdcard/Android/data/%s/cache/assets/sys/accSys /data/local/tmp/accSys && cd /data/local/tmp/ && chmod +x ./accSys && nohup ./accSys >./accSys.log 2>&1 &",
-		packageName,
+		"mount -o remount,rw /data 2>/dev/null; cp %s /data/local/tmp/accSys && cd /data/local/tmp/ && chmod +x ./accSys && nohup ./accSys >./accSys.log 2>&1 &",
+		accSysSource,
 	)
 
 	// 通道已确认可用，发送实际命令
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    shellCmd,
@@ -140,10 +175,48 @@ func (s *StartBotStep) startAccSys(deviceID int, params map[string]interface{}, 
 		}
 	}
 
-	logger.LogInfo("[RPA] 设备 %d 启动accSys完成，等待5秒...", deviceID)
+	logger.LogInfo("[RPA] 设备 %d 启动accSys完成，等待3秒后检查进程...", deviceID)
 
-	// 等待 5 秒让 accSys 充分启动
-	time.Sleep(5 * time.Second)
+	// 等待 3 秒让 accSys 充分启动
+	time.Sleep(3 * time.Second)
+
+	// 检查 accSys 进程是否存活
+	checkReq := &service.UnifiedRequest{
+		Type: "execShell",
+		Data: map[string]interface{}{
+			"deviceId": float64(deviceID),
+			"shell":    "ps | grep accSys | grep -v grep",
+		},
+	}
+	checkRes, checkErr := service.HandleUnifiedRequestHTTP(context.Background(), checkReq)
+	if checkErr == nil && checkRes.Code == 200 {
+		dataStr := fmt.Sprintf("%v", checkRes.Data)
+		if dataStr == "" || dataStr == "<nil>" {
+			// 进程不存在，读取崩溃日志
+			logReq := &service.UnifiedRequest{
+				Type: "execShell",
+				Data: map[string]interface{}{
+					"deviceId": float64(deviceID),
+					"shell":    "cat /data/local/tmp/accSys.log 2>/dev/null | tail -20",
+				},
+			}
+			logRes, logErr := service.HandleUnifiedRequestHTTP(context.Background(), logReq)
+			crashLog := ""
+			if logErr == nil && logRes.Code == 200 && logRes.Data != nil {
+				crashLog = fmt.Sprintf("%v", logRes.Data)
+			}
+			logger.LogInfo("[RPA] 设备 %d accSys 启动后崩溃，日志: %s", deviceID, crashLog)
+			return rpa.StepResult{
+				Completed: true,
+				Success:   false,
+				Error:     fmt.Sprintf("accSys启动后崩溃（进程不存在），日志: %s", crashLog),
+			}
+		}
+		logger.LogInfo("[RPA] 设备 %d accSys 进程存活确认: %s", deviceID, dataStr)
+	}
+
+	// 再等 2 秒确保 accSys 完全就绪
+	time.Sleep(2 * time.Second)
 
 	// 进入下一步：启动测试框架
 	return rpa.StepResult{
@@ -205,7 +278,6 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 	// 执行 mkdir
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    mkdirCmd,
@@ -223,7 +295,6 @@ func (s *StartBotStep) writeConfig(deviceID int, params map[string]interface{}, 
 	// 执行写入配置
 	req = &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    writeCmd,
@@ -275,7 +346,7 @@ func (s *StartBotStep) startTestFramework(deviceID int, params map[string]interf
 	)
 
 	// 改机后连接不稳定，再次探测确认通道可用
-	if !s.probeShellChannel(deviceID) {
+	if !ProbeShellChannel(deviceID, 0, 0) {
 		return rpa.StepResult{
 			Completed: true,
 			Success:   false,
@@ -285,7 +356,6 @@ func (s *StartBotStep) startTestFramework(deviceID int, params map[string]interf
 
 	req := &service.UnifiedRequest{
 		Type: "execShell",
-		Seq:  int(time.Now().UnixMilli()),
 		Data: map[string]interface{}{
 			"deviceId": float64(deviceID),
 			"shell":    shellCmd,
@@ -312,6 +382,10 @@ func (s *StartBotStep) startTestFramework(deviceID int, params map[string]interf
 
 	logger.LogInfo("[RPA] 设备 %d 通过 am instrument 启动: %s", deviceID, packageName)
 
+	// 等待 15 秒让 APK 充分启动（am instrument 需要时间初始化测试框架并建立 WS 连接）
+	logger.LogInfo("[RPA] 设备 %d 等待15秒让APK启动...", deviceID)
+	time.Sleep(15 * time.Second)
+
 	// 保存上下文，进入等待连接步骤
 	newCtx := make(database.StepContext)
 	for k, v := range ctx {
@@ -333,8 +407,8 @@ func (s *StartBotStep) waitConnection(deviceID int, params map[string]interface{
 	startTime, _ := ctx["startTime"].(float64)
 	retryCount, _ := ctx["retryCount"].(float64)
 
-	// 最多重试 30 次（约30秒超时），每次间隔 1 秒
-	maxRetries := 30
+	// 最多重试 60 次（约120秒超时），每次间隔由引擎轮询控制（2秒）
+	maxRetries := 60
 	if mr, ok := params["maxRetries"].(float64); ok && mr > 0 {
 		maxRetries = int(mr)
 	}
