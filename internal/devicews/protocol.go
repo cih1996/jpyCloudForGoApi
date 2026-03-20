@@ -46,6 +46,69 @@ const (
 	FormatBinary uint8 = 0x03 // 二进制数据
 )
 
+// MsgTypeName 获取消息类型的中文名称
+func MsgTypeName(msgType uint8) string {
+	switch msgType {
+	// 客户端 → 服务端
+	case 0x01:
+		return "心跳"
+	case 0x02:
+		return "INIT"
+	case 0x10:
+		return "状态上报"
+	case 0x11:
+		return "日志上报"
+	case 0x12:
+		return "任务结果"
+	case 0x13:
+		return "进度上报"
+	case 0x14:
+		return "脚本拉取"
+	case 0x15:
+		return "资源拉取"
+	case 0x16:
+		return "截图数据"
+	case 0x17:
+		return "调试结果"
+	case 0x18:
+		return "节点信息"
+	// 服务端 → 客户端
+	case 0x20:
+		return "任务下发"
+	case 0x21:
+		return "任务取消"
+	case 0x22:
+		return "配置更新"
+	case 0x23:
+		return "命令执行"
+	case 0x24:
+		return "脚本数据"
+	case 0x25:
+		return "资源数据"
+	case 0x26:
+		return "资源推送"
+	case 0x27:
+		return "调试执行"
+	default:
+		return "未知"
+	}
+}
+
+// PayloadSummary 提取 payload 摘要（JSON前100字符或关键字段）
+func PayloadSummary(payload []byte, dataFormat uint8, maxLen int) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if maxLen <= 0 {
+		maxLen = 120
+	}
+	s := string(payload)
+	if len(s) > maxLen {
+		s = s[:maxLen] + "..."
+	}
+	return s
+}
+
 // Header 协议头
 type Header struct {
 	MsgType    uint8  // 消息类型

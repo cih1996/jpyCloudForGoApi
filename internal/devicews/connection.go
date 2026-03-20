@@ -127,6 +127,7 @@ func (dc *DeviceConn) WritePacket(packet []byte) error {
 // SendHeartbeatAck 发送心跳响应
 func (dc *DeviceConn) SendHeartbeatAck(seqNo uint32) error {
 	packet := BuildPacket(MsgHeartbeatAck, FormatNone, dc.DeviceID, seqNo, nil)
+	logger.DeviceWSInfo("→ 心跳ACK(0x%02X) deviceId=%08X seq=%d", MsgHeartbeatAck, dc.DeviceID, seqNo)
 	return dc.WritePacket(packet)
 }
 
@@ -137,19 +138,24 @@ func (dc *DeviceConn) SendInitAck(success bool, config map[string]interface{}) e
 		ServerTime: time.Now().UnixMilli(),
 		Config:     config,
 	}
-	packet, err := BuildJSONPacket(MsgInitAck, dc.DeviceID, dc.NextSeqNo(), ack)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgInitAck, dc.DeviceID, seqNo, ack)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ INIT_ACK(0x%02X) deviceId=%08X seq=%d success=%v", MsgInitAck, dc.DeviceID, seqNo, success)
 	return dc.WritePacket(packet)
 }
 
 // SendTaskPush 下发任务
 func (dc *DeviceConn) SendTaskPush(task *TaskPushPayload) error {
-	packet, err := BuildJSONPacket(MsgTaskPush, dc.DeviceID, dc.NextSeqNo(), task)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgTaskPush, dc.DeviceID, seqNo, task)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ 任务下发(0x%02X) deviceId=%08X seq=%d taskId=%s taskName=%s",
+		MsgTaskPush, dc.DeviceID, seqNo, task.TaskID, task.TaskName)
 	return dc.WritePacket(packet)
 }
 
@@ -159,10 +165,13 @@ func (dc *DeviceConn) SendTaskCancel(taskID, reason string) error {
 		"taskId": taskID,
 		"reason": reason,
 	}
-	packet, err := BuildJSONPacket(MsgTaskCancel, dc.DeviceID, dc.NextSeqNo(), payload)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgTaskCancel, dc.DeviceID, seqNo, payload)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ 任务取消(0x%02X) deviceId=%08X seq=%d taskId=%s reason=%s",
+		MsgTaskCancel, dc.DeviceID, seqNo, taskID, reason)
 	return dc.WritePacket(packet)
 }
 
@@ -172,13 +181,13 @@ func (dc *DeviceConn) SendCommand(cmd string, params map[string]interface{}) err
 		Cmd:    cmd,
 		Params: params,
 	}
-	packet, err := BuildJSONPacket(MsgCommand, dc.DeviceID, dc.NextSeqNo(), payload)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgCommand, dc.DeviceID, seqNo, payload)
 	if err != nil {
 		return err
 	}
-	// 【调试日志】打印发送的命令
-	logger.DeviceWSInfo("→ 发送命令: deviceId=%08X, msgType=0x%02X (COMMAND), cmd=%s, params=%v",
-		dc.DeviceID, MsgCommand, cmd, params)
+	logger.DeviceWSInfo("→ 命令执行(0x%02X) deviceId=%08X seq=%d cmd=%s params=%v",
+		MsgCommand, dc.DeviceID, seqNo, cmd, params)
 	return dc.WritePacket(packet)
 }
 
@@ -189,17 +198,17 @@ func (dc *DeviceConn) SendDebugExec(debugID, code string, timeout int64) error {
 		Code:    code,
 		Timeout: timeout,
 	}
-	packet, err := BuildJSONPacket(MsgDebugExec, dc.DeviceID, dc.NextSeqNo(), payload)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgDebugExec, dc.DeviceID, seqNo, payload)
 	if err != nil {
 		return err
 	}
-	// 【调试日志】打印发送的调试执行
 	codePreview := code
 	if len(codePreview) > 100 {
 		codePreview = codePreview[:100] + "..."
 	}
-	logger.DeviceWSInfo("→ 发送调试执行: deviceId=%08X, msgType=0x%02X (DEBUG_EXEC), debugId=%s, code=%s",
-		dc.DeviceID, MsgDebugExec, debugID, codePreview)
+	logger.DeviceWSInfo("→ 调试执行(0x%02X) deviceId=%08X seq=%d debugId=%s code=%s",
+		MsgDebugExec, dc.DeviceID, seqNo, debugID, codePreview)
 	return dc.WritePacket(packet)
 }
 
@@ -210,10 +219,13 @@ func (dc *DeviceConn) SendScriptData(taskID, scriptHash, code string) error {
 		"scriptHash": scriptHash,
 		"code":       code,
 	}
-	packet, err := BuildJSONPacket(MsgScriptData, dc.DeviceID, dc.NextSeqNo(), payload)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgScriptData, dc.DeviceID, seqNo, payload)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ 脚本数据(0x%02X) deviceId=%08X seq=%d taskId=%s hash=%s codeLen=%d",
+		MsgScriptData, dc.DeviceID, seqNo, taskID, scriptHash, len(code))
 	return dc.WritePacket(packet)
 }
 
@@ -224,10 +236,13 @@ func (dc *DeviceConn) SendResourceData(name, hash, base64Data string) error {
 		"hash": hash,
 		"data": base64Data,
 	}
-	packet, err := BuildJSONPacket(MsgResourceData, dc.DeviceID, dc.NextSeqNo(), payload)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgResourceData, dc.DeviceID, seqNo, payload)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ 资源数据(0x%02X) deviceId=%08X seq=%d name=%s hash=%s dataLen=%d",
+		MsgResourceData, dc.DeviceID, seqNo, name, hash, len(base64Data))
 	return dc.WritePacket(packet)
 }
 
@@ -238,19 +253,25 @@ func (dc *DeviceConn) SendResourcePush(name, hash, base64Data string) error {
 		"hash": hash,
 		"data": base64Data,
 	}
-	packet, err := BuildJSONPacket(MsgResourcePush, dc.DeviceID, dc.NextSeqNo(), payload)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgResourcePush, dc.DeviceID, seqNo, payload)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ 资源推送(0x%02X) deviceId=%08X seq=%d name=%s hash=%s dataLen=%d",
+		MsgResourcePush, dc.DeviceID, seqNo, name, hash, len(base64Data))
 	return dc.WritePacket(packet)
 }
 
 // SendConfigUpdate 发送配置更新
 func (dc *DeviceConn) SendConfigUpdate(config map[string]interface{}) error {
-	packet, err := BuildJSONPacket(MsgConfigUpdate, dc.DeviceID, dc.NextSeqNo(), config)
+	seqNo := dc.NextSeqNo()
+	packet, err := BuildJSONPacket(MsgConfigUpdate, dc.DeviceID, seqNo, config)
 	if err != nil {
 		return err
 	}
+	logger.DeviceWSInfo("→ 配置更新(0x%02X) deviceId=%08X seq=%d config=%v",
+		MsgConfigUpdate, dc.DeviceID, seqNo, config)
 	return dc.WritePacket(packet)
 }
 

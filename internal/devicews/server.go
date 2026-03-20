@@ -338,9 +338,16 @@ func (s *Server) messageLoop(dc *DeviceConn) {
 			continue
 		}
 
-		// 【调试日志】打印收到的所有消息
-		logger.DeviceWSInfo("← 收到消息: deviceId=%08X, msgType=0x%02X, dataFormat=0x%02X, payloadLen=%d",
-			packet.Header.DeviceID, packet.Header.MsgType, packet.Header.DataFormat, len(packet.Payload))
+		// 收发明细日志：← 方向 + 类型名称 + payload摘要
+		typeName := MsgTypeName(packet.Header.MsgType)
+		summary := PayloadSummary(packet.Payload, packet.Header.DataFormat, 120)
+		if summary != "" {
+			logger.DeviceWSInfo("← %s(0x%02X) deviceId=%08X seq=%d %s",
+				typeName, packet.Header.MsgType, packet.Header.DeviceID, packet.Header.SeqNo, summary)
+		} else {
+			logger.DeviceWSInfo("← %s(0x%02X) deviceId=%08X seq=%d",
+				typeName, packet.Header.MsgType, packet.Header.DeviceID, packet.Header.SeqNo)
+		}
 
 		// 调用处理器
 		if handler, ok := s.handlers[packet.Header.MsgType]; ok {
