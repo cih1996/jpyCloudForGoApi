@@ -573,6 +573,11 @@ func runServer() {
 		logs.Error("Failed to initialize devicews logger: %v", err)
 	}
 
+	// Initialize API Logger
+	if err := logger.InitAPILogger(); err != nil {
+		logs.Error("Failed to initialize api logger: %v", err)
+	}
+
 	// Initialize Database
 	if err := database.Init("./data"); err != nil {
 		logs.Error("Failed to initialize database: %v", err)
@@ -612,6 +617,9 @@ func runServer() {
 		}
 		c.Next()
 	})
+
+	// API 收发明细日志中间件
+	r.Use(service.APILogMiddleware())
 
 	r.GET("/api/logs/download", func(c *gin.Context) {
 		logFile := "logs/unified_service.log"

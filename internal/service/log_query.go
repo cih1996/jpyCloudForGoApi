@@ -23,23 +23,29 @@ func HandleLogQuery(c *gin.Context) {
 		lines = 2000
 	}
 
+	var result []string
+
 	switch logType {
 	case "devicews":
-		result, err := logger.QueryDeviceWSLogs(lines, keyword)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"code": 500, "msg": "查询日志失败: " + err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"code": 200,
-			"data": gin.H{
-				"type":    "devicews",
-				"lines":   len(result),
-				"keyword": keyword,
-				"logs":    result,
-			},
-		})
+		result, err = logger.QueryDeviceWSLogs(lines, keyword)
+	case "api":
+		result, err = logger.QueryAPILogs(lines, keyword)
 	default:
-		c.JSON(http.StatusOK, gin.H{"code": 400, "msg": "不支持的日志类型: " + logType})
+		c.JSON(http.StatusOK, gin.H{"code": 400, "msg": "不支持的日志类型: " + logType + ", 可选: devicews, api"})
+		return
 	}
+
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "msg": "查询日志失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"type":    logType,
+			"lines":   len(result),
+			"keyword": keyword,
+			"logs":    result,
+		},
+	})
 }
