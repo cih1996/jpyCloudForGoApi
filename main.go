@@ -634,6 +634,7 @@ func runServer() {
 	// File Upload Routes
 	r.POST("/api/file/fast-upload", service.HandleFastUpload)
 	r.POST("/api/file/upload", service.HandleFileUpload)
+	r.POST("/api/file/delete", service.HandleFileDelete)
 
 	// RPA Routes
 	rpa.RegisterRoutes(r.Group("/api"))

@@ -126,3 +126,33 @@ func HandleFileUpload(c *gin.Context) {
 		"fileName": fileName,
 	}})
 }
+
+// HandleFileDelete 删除云文件
+func HandleFileDelete(c *gin.Context) {
+	if err := ensureGlobalApi(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "msg": "未登录或连接断开: " + err.Error()})
+		return
+	}
+
+	var req struct {
+		FileIds []int64 `json:"fileIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "msg": "参数错误: " + err.Error()})
+		return
+	}
+
+	logger.LogInfo("[FileUpload] Delete files: %v", req.FileIds)
+
+	errPkg := GetGlobalApi().TbFileCtl.Del(tbFileCtl.DelReq{
+		FileIds: req.FileIds,
+	})
+	if errPkg != nil {
+		logger.LogError("[FileUpload] Delete failed: %s", errPkg.Msg)
+		c.JSON(http.StatusOK, gin.H{"code": 500, "msg": "删除失败: " + errPkg.Msg})
+		return
+	}
+
+	logger.LogInfo("[FileUpload] Delete success: %v", req.FileIds)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "删除成功"})
+}
