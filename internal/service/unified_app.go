@@ -79,7 +79,7 @@ func handleDownLoadInstallApp(data interface{}) (interface{}, error) {
 	payload["receive"] = true
 
 	// Use F=293 for Download/Install task
-	res, err := SendGenericCommandToDevice(unifiedKey, deviceIds, 293, payload, true, true, 30*time.Second)
+	res, err := SendGenericCommandToDevice(unifiedKey, deviceIds, 293, payload, true, true, 120*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func handleDownLoadInstallApp(data interface{}) (interface{}, error) {
 }
 
 func handleGetDownloadProgress(data interface{}) (interface{}, error) {
-	// Expected data: { "deviceId": 123, "id": "task_id" }
+	// Expected data: { "deviceId": 123, "id": 3 } (id 可以是 number 或 string)
 	m, ok := data.(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("invalid data format")
@@ -99,9 +99,18 @@ func handleGetDownloadProgress(data interface{}) (interface{}, error) {
 	}
 	deviceId := uint64(deviceIdVal)
 
-	id, ok := m["id"].(string)
-	if !ok || id == "" {
-		return nil, fmt.Errorf("id (task id) missing or empty")
+	// 兼容 id 为 number 或 string
+	var idNum float64
+	switch v := m["id"].(type) {
+	case float64:
+		idNum = v
+	case string:
+		if v == "" {
+			return nil, fmt.Errorf("id (task id) missing or empty")
+		}
+		fmt.Sscanf(v, "%f", &idNum)
+	default:
+		return nil, fmt.Errorf("id (task id) missing or invalid type")
 	}
 
 	info, err := findDeviceInfoWithCache(deviceId)
@@ -110,7 +119,7 @@ func handleGetDownloadProgress(data interface{}) (interface{}, error) {
 	}
 
 	payload := map[string]interface{}{
-		"id": id,
+		"id": idNum, // 传 number 类型，匹配 extractUint32Field
 	}
 
 	// F=294 for Get Download Progress

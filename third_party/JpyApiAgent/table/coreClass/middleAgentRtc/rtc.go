@@ -139,7 +139,12 @@ func (s *TypeInfo) onData(packet *bufferPool.Packet, conn NetClient.NetClient) b
 			msg.Req = false
 			ch, ok := value.(chan *public.Message)
 			if ok {
-				ch <- &msg
+				// 防止向已关闭的 channel 发送导致 panic
+				select {
+				case ch <- &msg:
+				default:
+					logs.Warn("异步转同步：channel 已关闭或满，seq=%d，丢弃响应", msg.Seq)
+				}
 			}
 			return true
 		}

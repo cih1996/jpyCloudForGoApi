@@ -182,6 +182,12 @@ func UnifiedWSHandler(c *gin.Context) {
 		logger.LogInfo("[Unified] WS recv: client=%s bytes=%d payload=%s", clientAddr, len(message), previewPayload(message))
 
 		go func(msg []byte) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.LogError("[Unified] goroutine panic recovered: %v", r)
+				}
+			}()
+
 			var req UnifiedRequest
 			if err := json.Unmarshal(msg, &req); err != nil {
 				logger.LogError("[Unified] Invalid JSON: client=%s err=%v payload=%s", clientAddr, err, previewPayload(msg))

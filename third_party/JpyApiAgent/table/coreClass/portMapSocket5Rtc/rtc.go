@@ -189,7 +189,11 @@ func (s *TypeInfo) OnData(p *bufferPool.Packet, _ NetClient.NetClient) bool {
 			if ok {
 				ch, ok := value.(chan *public.Message)
 				if ok {
-					ch <- &msg
+					select {
+					case ch <- &msg:
+					default:
+						logs.Warn("portMapRtc: channel 已关闭或满，seq=%d，丢弃响应", msg.Seq)
+					}
 				}
 				return true
 			}

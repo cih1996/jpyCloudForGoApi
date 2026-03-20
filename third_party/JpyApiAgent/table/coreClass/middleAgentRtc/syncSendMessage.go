@@ -76,6 +76,11 @@ func (s *TypeInfo) syncCall(msg *public.Message, deviceId uint64, timeout time.D
 //	string: 设备回复的消息
 //	error: 错误信息
 func (s *TypeInfo) SyncSendToDevice(msgType uint16, msgBody interface{}, deviceId uint64, logMsg string) (jsonStr string, err error) {
+	return s.SyncSendToDeviceWithTimeout(msgType, msgBody, deviceId, logMsg, time.Second*30)
+}
+
+// SyncSendToDeviceWithTimeout 同步方式发送消息到设备，支持自定义超时
+func (s *TypeInfo) SyncSendToDeviceWithTimeout(msgType uint16, msgBody interface{}, deviceId uint64, logMsg string, timeout time.Duration) (jsonStr string, err error) {
 	if !s.deviceExists(deviceId) && deviceId != 0 {
 		logs.Error("[同步消息]中间件[%d]%s设备[%d]不在本中间件管辖范围", s.MiddlewareId, logMsg, deviceId)
 		return "", errors.New(fmt.Sprintf("[同步消息]中间件[%d]%s设备[%d]不在本中间件管辖范围", s.MiddlewareId, logMsg, deviceId))
@@ -89,7 +94,7 @@ func (s *TypeInfo) SyncSendToDevice(msgType uint16, msgBody interface{}, deviceI
 			return "", errors.New(fmt.Sprintf("[同步消息]中间件[%d]%s数据构造失败,%s", s.MiddlewareId, logMsg, err.Error()))
 		}
 	}
-	retMsg := s.syncCall(msg, deviceId, time.Second*30)
+	retMsg := s.syncCall(msg, deviceId, timeout)
 	if err = retMsg.Error(); err != nil {
 		logs.Error("[同步消息]中间件[%d]%s设备[%d]无返回消息,%s", s.MiddlewareId, logMsg, deviceId, err.Error())
 		return "", errors.New(fmt.Sprintf("[同步消息]中间件[%d]%s设备[%d]无返回消息,%s", s.MiddlewareId, logMsg, deviceId, err.Error()))
@@ -284,7 +289,7 @@ func (s *TypeInfo) SyncRunApp(deviceId uint64, packageName string) (rec string, 
 //	string:  返回json文本
 //	error: 错误信息
 func (s *TypeInfo) SyncDownloadAndInstall(deviceId uint64, install *publicStruct.DownloadAndInstall) (rec string, err error) {
-	return s.SyncSendToDevice(public.FuncFileDownload, install, deviceId, "[同步][下载并安装应用]")
+	return s.SyncSendToDeviceWithTimeout(public.FuncFileDownload, install, deviceId, "[同步][下载并安装应用]", time.Second*120)
 }
 
 // SyncCheckProgress 同步方式查询下载并安装进度

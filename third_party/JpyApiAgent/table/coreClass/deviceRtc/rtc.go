@@ -134,7 +134,11 @@ func (s *TypeInfo) onData(packet *bufferPool.Packet, conn NetClient.NetClient) b
 			msg.Req = false
 			ch, ok := value.(chan *public.Message)
 			if ok {
-				ch <- &msg
+				select {
+				case ch <- &msg:
+				default:
+					logs.Warn("deviceRtc: channel 已关闭或满，seq=%d，丢弃响应", msg.Seq)
+				}
 			}
 			return true
 		}
