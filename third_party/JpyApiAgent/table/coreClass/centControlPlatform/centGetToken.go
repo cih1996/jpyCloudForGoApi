@@ -37,6 +37,11 @@ func (c *Core) CenterGetMiddlewareRtcToken(middlewareId uint64) (*rtcCtl.GetRtcT
 		return nil, ErrPkg.NewErrE("序列化失败", err)
 	}
 
+	// 防御：session 断开时不能调用，否则空指针 panic
+	if c.server.session == nil {
+		return nil, ErrPkg.NewErrE("服务器连接已断开，无法获取RTC Token", nil)
+	}
+
 	// 发送请求并获取原始响应
 	response, sendErr := c.server.session.SendCallBytes(TcpTypePkg.TcpType_Text_AutoGzip, jsonBytes, 30*1000)
 	if sendErr != nil {
@@ -76,6 +81,9 @@ func (c *Core) CenterGetPortMapSocket5RtcToken(deviceId uint64) (*rtcCtl.GetDevi
 	if !ok {
 		return nil, ErrPkg.NewErrE("设备不存在", nil)
 	}
+	if c.server.api == nil {
+		return nil, ErrPkg.NewErrE("服务器连接已断开，无法获取端口映射Token", nil)
+	}
 	token, err2 := c.server.api.UserDeviceCtl.GetDeviceCtlToken(userDeviceCtl.GetDeviceCtlTokenReq{TbYunJiUserDeviceId: &device.TBYunJiUserDeviceId})
 	if err2 != nil {
 		logs.Info("设备临时控制码获取错误", err2)
@@ -91,6 +99,9 @@ func (c *Core) CenterGetDeviceH264AudioRtcToken(deviceId uint64) (*rtcCtl.GetDev
 	device, ok := c.getDevice(deviceId)
 	if !ok {
 		return nil, ErrPkg.NewErrE("设备不存在", nil)
+	}
+	if c.server.api == nil {
+		return nil, ErrPkg.NewErrE("服务器连接已断开，无法获取串流Token", nil)
 	}
 	token, err2 := c.server.api.UserDeviceCtl.GetDeviceCtlToken(userDeviceCtl.GetDeviceCtlTokenReq{TbYunJiUserDeviceId: &device.TBYunJiUserDeviceId})
 	if err2 != nil {
