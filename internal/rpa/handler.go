@@ -1,11 +1,20 @@
 package rpa
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"port-mapping-demo/internal/database"
+	"port-mapping-demo/pkg/logger"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // RegisterRoutes 注册 RPA 相关路由
@@ -42,6 +51,9 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		// 步骤类型
 		rpa.GET("/step-types", listStepTypes)
 
+		// 单步临时执行
+		rpa.POST("/run-step", runSingleStep)
+
 		// 脚本反馈接口
 		rpa.POST("/devices/:deviceId/feedback", updateFeedback)
 
@@ -51,6 +63,7 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		rpa.POST("/scripts", createScript)
 		rpa.PUT("/scripts/:id", updateScript)
 		rpa.DELETE("/scripts/:id", deleteScript)
+		rpa.POST("/scripts/:id/debug", debugScript)
 
 		// 执行历史
 		rpa.GET("/history", listExecutionHistory)
@@ -296,6 +309,92 @@ func listStepTypes(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": types})
 }
 
+// ========== 单步临时执行 ==========
+
+// runSingleStep 临时执行单个 RPA 步骤（不创建流程，不写数据库）
+// 同步等待步骤完成，带超时
+func runSingleStep(c *gin.Context) {
+	var req struct {
+		DeviceID int                    `json:"deviceId" binding:"required"`
+		Type     string                 `json:"type" binding:"required"`
+		Params   map[string]interface{} `json:"params"`
+		Timeout  int                    `json:"timeout"` // 超时秒数，默认300
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("参数错误: %v", err)})
+		return
+	}
+
+	// 获取步骤执行器
+	executor := GetStepExecutor(req.Type)
+	if executor == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("未知步骤类型: %s", req.Type)})
+		return
+	}
+
+	if req.Params == nil {
+		req.Params = make(map[string]interface{})
+	}
+
+	timeout := 300
+	if req.Timeout > 0 {
+		timeout = req.Timeout
+	}
+
+	logger.LogInfo("[RPA] 单步执行: 设备 %d, 类型 %s, 超时 %ds", req.DeviceID, req.Type, timeout)
+
+	// 轮询执行直到完成或超时
+	subStep := 0
+	ctx := make(database.StepContext)
+	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	pollInterval := 2 * time.Second
+	var lastResult StepResult
+
+	for {
+		if time.Now().After(deadline) {
+			c.JSON(http.StatusOK, gin.H{
+				"data": gin.H{
+					"completed": true,
+					"success":   false,
+					"error":     fmt.Sprintf("执行超时（%ds）", timeout),
+					"stepType":  req.Type,
+					"stepName":  executor.Name(),
+				},
+			})
+			return
+		}
+
+		lastResult = executor.Execute(req.DeviceID, req.Params, subStep, ctx)
+
+		if lastResult.Completed {
+			// 步骤完成
+			result := gin.H{
+				"completed": true,
+				"success":   lastResult.Success,
+				"stepType":  req.Type,
+				"stepName":  executor.Name(),
+			}
+			if lastResult.Error != "" {
+				result["error"] = lastResult.Error
+			}
+			if lastResult.Output != nil {
+				outputJSON, _ := json.Marshal(lastResult.Output)
+				result["output"] = json.RawMessage(outputJSON)
+			}
+			c.JSON(http.StatusOK, gin.H{"data": result})
+			return
+		}
+
+		// 未完成，更新子步骤和上下文，继续轮询
+		subStep = lastResult.NextSub
+		if lastResult.Context != nil {
+			ctx = lastResult.Context
+		}
+
+		time.Sleep(pollInterval)
+	}
+}
+
 // ========== 脚本反馈 ==========
 
 func updateFeedback(c *gin.Context) {
@@ -388,6 +487,63 @@ func deleteScript(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
+// debugScript 在设备上调试执行脚本
+func debugScript(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	var req struct {
+		DeviceID int `json:"deviceId" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 1. 获取脚本
+	script, err := database.GetScript(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if script == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "脚本不存在"})
+		return
+	}
+
+	// 2. 读取脚本代码（从文件）
+	scriptPath := filepath.Join("./scripts", script.Name+".js")
+	codeBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("读取脚本文件失败: %v", err)})
+		return
+	}
+	code := string(codeBytes)
+
+	// 3. 解析设备 CRC32 ID
+	crc32ID, err := resolveDeviceCRC32Internal(req.DeviceID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 4. 执行脚本并获取结果
+	timeout := script.Timeout
+	if timeout == 0 {
+		timeout = 30000 // 默认30秒
+	}
+	result, err := executeScriptOnDevice(crc32ID, code, timeout)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 5. 返回结果
+	c.JSON(http.StatusOK, gin.H{
+		"success": result.Success,
+		"logs":    result.Logs,
+		"result":  result.Result,
+	})
+}
+
 // ========== 执行历史 ==========
 
 func listExecutionHistory(c *gin.Context) {
@@ -439,4 +595,142 @@ func getDeviceExecutionHistory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": histories})
+}
+
+// ========== 脚本调试辅助函数 ==========
+
+// DebugResult 调试执行结果
+type DebugResult struct {
+	DebugID   string        `json:"debugId"`
+	Success   bool          `json:"success"`
+	Result    interface{}   `json:"result,omitempty"`
+	Error     string        `json:"error,omitempty"`
+	Logs      []interface{} `json:"logs,omitempty"`
+	Duration  int64         `json:"duration"`
+	Timestamp int64         `json:"timestamp"`
+}
+
+// resolveDeviceCRC32Internal 通过设备编号查找对应的 CRC32 ID
+func resolveDeviceCRC32Internal(deviceID int) (uint32, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	resp, err := client.Get("http://127.0.0.1:1001/api/debug/ws-match")
+	if err != nil {
+		return 0, fmt.Errorf("查询设备映射失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Code int `json:"code"`
+		Data struct {
+			CloudDevices  []map[string]interface{} `json:"cloudDevices"`
+			WsConnections []map[string]interface{} `json:"wsConnections"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || result.Code != 200 {
+		return 0, fmt.Errorf("解析设备映射失败")
+	}
+
+	// 1. 从云平台设备列表找设备编号对应的 UUID
+	var targetUUID string
+	for _, dev := range result.Data.CloudDevices {
+		if did, ok := dev["deviceId"].(float64); ok && int(did) == deviceID {
+			targetUUID, _ = dev["uuid"].(string)
+			break
+		}
+	}
+	if targetUUID == "" {
+		return 0, fmt.Errorf("设备 %d 不存在或未在平台注册", deviceID)
+	}
+
+	// 2. 从 WS 连接列表找 serialno == UUID 的，拿到 CRC32 ID
+	for _, conn := range result.Data.WsConnections {
+		sn, _ := conn["serialno"].(string)
+		if sn == targetUUID {
+			crc32Hex, _ := conn["deviceId"].(string)
+			if crc32Hex == "" {
+				continue
+			}
+			v, err := strconv.ParseUint(crc32Hex, 16, 32)
+			if err != nil {
+				return 0, fmt.Errorf("解析 CRC32 ID 失败: %s", crc32Hex)
+			}
+			return uint32(v), nil
+		}
+	}
+
+	return 0, fmt.Errorf("设备 %d 的脚本APK未连接，请先执行 start_bot", deviceID)
+}
+
+// executeScriptOnDevice 在设备上执行脚本并等待结果
+func executeScriptOnDevice(crc32ID uint32, code string, timeout int) (*DebugResult, error) {
+	client := &http.Client{Timeout: time.Duration(timeout+5000) * time.Millisecond}
+
+	// 生成 debugId
+	debugID := uuid.New().String()[:8]
+
+	// 发送调试执行请求
+	sendURL := fmt.Sprintf("http://127.0.0.1:1001/api/devicews/devices/%d/debug", crc32ID)
+	body := map[string]interface{}{
+		"debugId": debugID,
+		"code":    code,
+		"timeout": int64(timeout),
+	}
+
+	jsonData, _ := json.Marshal(body)
+	resp, err := client.Post(sendURL, "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("发送调试请求失败: %v", err)
+	}
+	resp.Body.Close()
+
+	logger.LogInfo("[RPA] 脚本调试已发送到设备 CRC32=%08X, debugId=%s", crc32ID, debugID)
+
+	// 轮询等待结果
+	resultURL := fmt.Sprintf("http://127.0.0.1:1001/api/devicews/devices/%d/debug/%s", crc32ID, debugID)
+	deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+
+		resp, err := client.Get(resultURL)
+		if err != nil {
+			continue
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		var apiResp struct {
+			Code int             `json:"code"`
+			Msg  string          `json:"msg"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(respBody, &apiResp); err != nil {
+			continue
+		}
+
+		// 404 = 结果还没回来
+		if apiResp.Code == 404 {
+			continue
+		}
+
+		if apiResp.Code != 200 || len(apiResp.Data) == 0 {
+			continue
+		}
+
+		var result DebugResult
+		if err := json.Unmarshal(apiResp.Data, &result); err != nil {
+			continue
+		}
+
+		// 拿到结果了
+		logger.LogInfo("[RPA] 脚本调试完成: debugId=%s, success=%v, duration=%dms", debugID, result.Success, result.Duration)
+		return &result, nil
+	}
+
+	// 超时
+	return nil, fmt.Errorf("等待结果超时（%dms）", timeout)
 }
