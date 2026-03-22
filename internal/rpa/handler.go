@@ -538,9 +538,12 @@ func debugScript(c *gin.Context) {
 
 	// 5. 返回结果
 	c.JSON(http.StatusOK, gin.H{
-		"success": result.Success,
-		"logs":    result.Logs,
-		"result":  result.Result,
+		"code": 200,
+		"data": gin.H{
+			"success": result.Success,
+			"logs":    result.Logs,
+			"result":  result.Result,
+		},
 	})
 }
 
